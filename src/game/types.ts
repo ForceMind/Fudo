@@ -130,7 +130,10 @@ export interface GameState {
   reachableCells: ReachableCell[];
   logs: GameLogEntry[];
   notice: GameNotice | null;
+  globalNotice: GameNotice | null;
   winnerId: PlayerId | null;
   lastMove: MoveResult | null;
   turnNumber: number;
+  startedAt: number;
+  turnStartedAt: number;
 }

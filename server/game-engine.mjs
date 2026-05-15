@@ -6,6 +6,7 @@ const DIRECTIONS = [
 ];
 const PIECES_PER_PLAYER = 4;
 const MAX_LOGS = 60;
+const TURN_TIMEOUT_MS = 30000;
 
 function coordKey(coord) {
   return `${coord.x},${coord.y}`;
@@ -308,6 +309,23 @@ function appendLog(state, text, tone = 'info') {
   };
 }
 
+function nextNoticeId(state) {
+  const localId = Number(state.notice?.id ?? 0) || 0;
+  const globalId = Number(state.globalNotice?.id ?? 0) || 0;
+  return Math.max(localId, globalId) + 1;
+}
+
+function withGlobalNotice(state, text, tone = 'info') {
+  return {
+    ...state,
+    globalNotice: {
+      id: nextNoticeId(state),
+      text,
+      tone,
+    },
+  };
+}
+
 function rollDie() {
   return Math.floor(Math.random() * 6) + 1;
 }
@@ -334,6 +352,7 @@ function finishTurn(state) {
     moveDraft: null,
     reachableCells: [],
     turnNumber: nextIndex <= previousIndex ? state.turnNumber + 1 : state.turnNumber,
+    turnStartedAt: Date.now(),
   };
 }
 
@@ -379,6 +398,23 @@ function rollForCurrentPlayer(state, dice = rollDie()) {
   const selectablePieceIds = getSelectablePieceIds(nextState);
   if (selectablePieceIds.length === 0) {
     nextState = appendLog(nextState, `${currentPlayer.name}没有可移动棋子，跳过。`, 'warning');
+    if (dice === 6) {
+      nextState = appendLog(nextState, `恭喜 ${currentPlayer.name} 掷出 6，可以再掷一次。`, 'success');
+      return withGlobalNotice(
+        {
+          ...nextState,
+          stage: 'Roll',
+          dice: null,
+          actionPower: null,
+          selectedPieceId: null,
+          moveDraft: null,
+          reachableCells: [],
+          turnStartedAt: Date.now(),
+        },
+        `恭喜 ${currentPlayer.name} 掷出 6，可以再掷一次。`,
+        'success',
+      );
+    }
     return finishTurn(nextState);
   }
 
@@ -434,6 +470,9 @@ function movePieceToReachableCell(state, piece, reachable) {
   const currentPlayer = getPlayerById(state, piece.playerId);
   const preview = previewMove(state, piece, reachable.coord);
   const capturedPieces = preview.capturedPieceIds.map((pieceId) => getPieceById(state, pieceId)).filter(Boolean);
+  const capturedNames = capturedPieces.map(
+    (captured) => `${getPlayerById(state, captured.playerId).name}${captured.index + 1}号`,
+  );
 
   const nextPieces = state.pieces.map((candidate) => {
     if (preview.capturedPieceIds.includes(candidate.id)) {
@@ -459,6 +498,7 @@ function movePieceToReachableCell(state, piece, reachable) {
     nextPieces.filter((candidate) => candidate.playerId === piece.playerId && candidate.home).length === PIECES_PER_PLAYER
       ? piece.playerId
       : null;
+  const canRollAgain = !winnerId && (capturedPieces.length > 0 || state.dice === 6);
 
   const portalTransition = findPortalTransitionInPath(state.board, reachable.path);
   const pathEffects = getPathPowerEffects(state.board, reachable.path);
@@ -481,9 +521,10 @@ function movePieceToReachableCell(state, piece, reachable) {
     moveDraft: null,
     reachableCells: [],
     lastMove: moveResult,
-    stage: winnerId ? 'End' : capturedPieces.length > 0 ? 'Battle' : 'Roll',
-    dice: winnerId ? state.dice : capturedPieces.length > 0 ? state.dice : null,
-    actionPower: winnerId ? state.actionPower : capturedPieces.length > 0 ? state.actionPower : null,
+    stage: winnerId ? 'End' : 'Roll',
+    dice: null,
+    actionPower: null,
+    turnStartedAt: winnerId ? state.turnStartedAt : canRollAgain ? Date.now() : state.turnStartedAt,
   };
 
   nextState = appendLog(nextState, `${currentPlayer.name}${piece.index + 1}号移动到 ${coordKey(preview.final)}。`);
@@ -507,13 +548,22 @@ function movePieceToReachableCell(state, piece, reachable) {
   }
 
   if (capturedPieces.length > 0) {
+    const captureNotice = canRollAgain
+      ? `恭喜 ${currentPlayer.name} 吃掉 ${capturedNames.join('、')}，可以再掷一次。`
+      : `${currentPlayer.name} 吃掉 ${capturedNames.join('、')}。`;
     nextState = appendLog(
       nextState,
-      `${currentPlayer.name}吃掉 ${capturedPieces
-        .map((captured) => `${getPlayerById(state, captured.playerId).name}${captured.index + 1}号`)
-        .join('、')}。`,
+      `${currentPlayer.name}吃掉 ${capturedNames.join('、')}。`,
       'danger',
     );
+    nextState = withGlobalNotice(
+      nextState,
+      captureNotice,
+      'danger',
+    );
+  } else if (canRollAgain) {
+    nextState = appendLog(nextState, `恭喜 ${currentPlayer.name} 掷出 6，可以再掷一次。`, 'success');
+    nextState = withGlobalNotice(nextState, `恭喜 ${currentPlayer.name} 掷出 6，可以再掷一次。`, 'success');
   }
 
   if (preview.wouldHome) {
@@ -524,7 +574,7 @@ function movePieceToReachableCell(state, piece, reachable) {
     nextState = appendLog(nextState, `${currentPlayer.name}获胜。`, 'success');
   }
 
-  if (!winnerId && capturedPieces.length === 0) {
+  if (!winnerId && !canRollAgain) {
     nextState = finishTurn(nextState);
   }
 
@@ -602,34 +652,51 @@ function moveAiFromSelect(state) {
   );
 }
 
-function advanceOneAiStep(state) {
+function isTurnTimedOut(state, timeoutMs = TURN_TIMEOUT_MS) {
+  return Date.now() - Number(state.turnStartedAt ?? Date.now()) >= timeoutMs;
+}
+
+function markTimedOut(state, currentPlayer) {
+  const timeoutMessage = `${currentPlayer.name} 回合超时，AI 接管本次行动。`;
+  return appendLog(withGlobalNotice(state, timeoutMessage, 'warning'), timeoutMessage, 'warning');
+}
+
+function advanceOneAiStep(state, options = {}) {
   const currentPlayer = getCurrentPlayer(state);
-  if (!currentPlayer || currentPlayer.isHuman || state.winnerId || state.stage === 'End') {
+  if (!currentPlayer || state.winnerId || state.stage === 'End') {
     return state;
   }
 
-  if (state.stage === 'Battle') {
-    return finishBattle(state);
+  const timedOutHuman =
+    currentPlayer.isHuman && options.allowTimedOutHuman && isTurnTimedOut(state, options.turnTimeoutMs ?? TURN_TIMEOUT_MS);
+  if (currentPlayer.isHuman && !timedOutHuman) {
+    return state;
   }
 
-  if (state.stage === 'Roll') {
-    const rolledState = rollForCurrentPlayer(state);
+  const activeState = timedOutHuman ? markTimedOut(state, currentPlayer) : state;
+
+  if (activeState.stage === 'Battle') {
+    return finishBattle(activeState);
+  }
+
+  if (activeState.stage === 'Roll') {
+    const rolledState = rollForCurrentPlayer(activeState);
     return rolledState.stage === 'Select' ? moveAiFromSelect(rolledState) : rolledState;
   }
 
-  if (state.stage === 'Select') {
-    return moveAiFromSelect(state);
+  if (activeState.stage === 'Select') {
+    return moveAiFromSelect(activeState);
   }
 
-  return state;
+  return activeState;
 }
 
-export function advanceServerAiTurns(gameState, maxSteps = 12) {
+export function advanceServerAiTurns(gameState, maxSteps = 12, options = {}) {
   let state = gameState;
   let changed = false;
 
   for (let step = 0; step < maxSteps; step += 1) {
-    const nextState = advanceOneAiStep(state);
+    const nextState = advanceOneAiStep(state, options);
     if (nextState === state) {
       break;
     }

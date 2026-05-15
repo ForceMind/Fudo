@@ -18,6 +18,8 @@ const adminHosts = String(process.env.ADMIN_HOSTS ?? process.env.ADMIN_HOST ?? '
   .map((host) => host.trim().toLowerCase())
   .filter(Boolean);
 const offlineTimeoutMs = Number(process.env.OFFLINE_TIMEOUT_MS ?? 15000);
+const aiAdvanceDelayMs = Number(process.env.AI_ADVANCE_DELAY_MS ?? 900);
+const turnTimeoutMs = Number(process.env.TURN_TIMEOUT_MS ?? 30000);
 
 const contentTypes = {
   '.html': 'text/html; charset=utf-8',
@@ -73,12 +75,15 @@ function sanitizeGameStateForStorage(gameState) {
     return gameState;
   }
 
+  const timestamp = Date.now();
   return {
     ...gameState,
     selectedPieceId: null,
     moveDraft: null,
     reachableCells: [],
     notice: null,
+    startedAt: Number(gameState.startedAt ?? timestamp),
+    turnStartedAt: Number(gameState.turnStartedAt ?? timestamp),
   };
 }
 
@@ -198,17 +203,27 @@ function findRoomByMatch(db, match) {
 }
 
 function createMatchFromRoom(room) {
+  const startedAtMs = Date.now();
+  const startedAt = new Date(startedAtMs).toISOString();
   const match = {
     id: `mat_${randomUUID()}`,
     roomCode: room.code,
     status: 'running',
-    startedAt: now(),
+    startedAt,
     endedAt: null,
-    updatedAt: now(),
+    updatedAt: startedAt,
     winner: null,
     turnNumber: 1,
     players: Array.isArray(room.pendingPlayers) ? room.pendingPlayers : [],
-    gameState: sanitizeGameStateForStorage(room.pendingGameState ?? null),
+    gameState: sanitizeGameStateForStorage(
+      room.pendingGameState
+        ? {
+            ...room.pendingGameState,
+            startedAt: startedAtMs,
+            turnStartedAt: startedAtMs,
+          }
+        : null,
+    ),
     stateVersion: 1,
   };
 
@@ -291,7 +306,15 @@ function advanceMatchAi(db, match) {
   }
 
   const presenceChanged = syncMatchPresence(db, match);
-  const result = advanceServerAiTurns(match.gameState);
+  if (Date.now() - parseTimestamp(match.updatedAt) < aiAdvanceDelayMs) {
+    return presenceChanged;
+  }
+
+  match.gameState = sanitizeGameStateForStorage(match.gameState);
+  const result = advanceServerAiTurns(match.gameState, 1, {
+    allowTimedOutHuman: true,
+    turnTimeoutMs,
+  });
   if (!result.changed) {
     return presenceChanged;
   }
@@ -643,19 +666,29 @@ async function handleApi(req, res, url) {
 
   if (req.method === 'POST' && path === '/api/matches/start') {
     const body = await readBody(req);
-      const match = {
-        id: `mat_${randomUUID()}`,
-        roomCode: body.roomCode ?? null,
-        status: 'running',
-        startedAt: now(),
-        endedAt: null,
-        updatedAt: now(),
-        winner: null,
-        turnNumber: 1,
-        players: Array.isArray(body.players) ? body.players : [],
-        gameState: sanitizeGameStateForStorage(body.gameState ?? null),
-        stateVersion: 1,
-      };
+    const startedAtMs = Date.now();
+    const startedAt = new Date(startedAtMs).toISOString();
+    const match = {
+      id: `mat_${randomUUID()}`,
+      roomCode: body.roomCode ?? null,
+      status: 'running',
+      startedAt,
+      endedAt: null,
+      updatedAt: startedAt,
+      winner: null,
+      turnNumber: 1,
+      players: Array.isArray(body.players) ? body.players : [],
+      gameState: sanitizeGameStateForStorage(
+        body.gameState
+          ? {
+              ...body.gameState,
+              startedAt: startedAtMs,
+              turnStartedAt: startedAtMs,
+            }
+          : null,
+      ),
+      stateVersion: 1,
+    };
     db.matches.unshift(match);
     writeDb(db);
     sendJson(res, 201, { match });

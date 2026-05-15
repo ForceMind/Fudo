@@ -3,6 +3,7 @@ import type { Coord, Player, PlayerId } from './types';
 export const BOARD_SIZE = 13;
 export const PIECES_PER_PLAYER = 4;
 export const MAX_LOGS = 60;
+export const TURN_TIMEOUT_MS = 30_000;
 
 export const PLAYER_ORDER: PlayerId[] = ['red', 'blue', 'green', 'yellow'];
 

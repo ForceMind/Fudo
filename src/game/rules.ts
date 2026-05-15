@@ -25,6 +25,7 @@ export function createInitialState(playerConfigs: PlayerConfigInput[] = []): Gam
   logId = 1;
   moveId = 1;
   noticeId = 1;
+  const timestamp = Date.now();
 
   const board = createBoard();
   const players: Player[] = PLAYER_ORDER.map((playerId) => {
@@ -67,9 +68,12 @@ export function createInitialState(playerConfigs: PlayerConfigInput[] = []): Gam
       },
     ],
     notice: null,
+    globalNotice: null,
     winnerId: null,
     lastMove: null,
     turnNumber: 1,
+    startedAt: timestamp,
+    turnStartedAt: timestamp,
   };
 }
 
@@ -156,6 +160,21 @@ export function withNotice(
   return {
     ...state,
     notice: {
+      id: noticeId++,
+      text,
+      tone,
+    },
+  };
+}
+
+export function withGlobalNotice(
+  state: GameState,
+  text: string,
+  tone: GameNotice['tone'] = 'info',
+): GameState {
+  return {
+    ...state,
+    globalNotice: {
       id: noticeId++,
       text,
       tone,
@@ -251,6 +270,7 @@ function finishTurn(state: GameState): GameState {
     moveDraft: null,
     reachableCells: [],
     turnNumber: nextIndex <= previousIndex ? state.turnNumber + 1 : state.turnNumber,
+    turnStartedAt: Date.now(),
   };
 }
 
@@ -299,6 +319,23 @@ export function rollForCurrentPlayer(state: GameState, dice = rollDie()): GameSt
   const selectablePieceIds = getSelectablePieceIds(nextState);
   if (selectablePieceIds.length === 0) {
     nextState = appendLog(nextState, `${currentPlayer.name}没有可移动棋子，跳过。`, 'warning');
+    if (dice === 6) {
+      nextState = appendLog(nextState, `恭喜 ${currentPlayer.name} 掷出 6，可以再掷一次。`, 'success');
+      return withGlobalNotice(
+        {
+          ...nextState,
+          stage: 'Roll',
+          dice: null,
+          actionPower: null,
+          selectedPieceId: null,
+          moveDraft: null,
+          reachableCells: [],
+          turnStartedAt: Date.now(),
+        },
+        `恭喜 ${currentPlayer.name} 掷出 6，可以再掷一次。`,
+        'success',
+      );
+    }
     return finishTurn(nextState);
   }
 
@@ -412,6 +449,10 @@ export function movePieceToReachableCell(state: GameState, piece: Piece, reachab
     .map((pieceId) => getPieceById(state, pieceId))
     .filter((capturedPiece): capturedPiece is Piece => Boolean(capturedPiece));
 
+  const capturedNames = capturedPieces.map(
+    (captured) => `${getPlayerById(state, captured.playerId).name}${captured.index + 1}号`,
+  );
+
   let nextPieces = state.pieces.map((candidate) => {
     if (preview.capturedPieceIds.includes(candidate.id)) {
       return {
@@ -437,6 +478,7 @@ export function movePieceToReachableCell(state: GameState, piece: Piece, reachab
     PIECES_PER_PLAYER
       ? piece.playerId
       : null;
+  const canRollAgain = !winnerId && (capturedPieces.length > 0 || state.dice === 6);
 
   const portalTransition = findPortalTransitionInPath(state.board, reachable.path);
   const pathEffects = getPathPowerEffects(state.board, reachable.path);
@@ -459,9 +501,10 @@ export function movePieceToReachableCell(state: GameState, piece: Piece, reachab
     moveDraft: null,
     reachableCells: [],
     lastMove: moveResult,
-    stage: winnerId ? 'End' : capturedPieces.length > 0 ? 'Battle' : 'Roll',
-    dice: winnerId ? state.dice : capturedPieces.length > 0 ? state.dice : null,
-    actionPower: winnerId ? state.actionPower : capturedPieces.length > 0 ? state.actionPower : null,
+    stage: winnerId ? 'End' : 'Roll',
+    dice: null,
+    actionPower: null,
+    turnStartedAt: winnerId ? state.turnStartedAt : canRollAgain ? Date.now() : state.turnStartedAt,
   };
 
   const moveText = `${currentPlayer.name}${piece.index + 1}号移动到 ${coordKey(preview.final)}。`;
@@ -486,11 +529,22 @@ export function movePieceToReachableCell(state: GameState, piece: Piece, reachab
   }
 
   if (capturedPieces.length > 0) {
+    const captureNotice = canRollAgain
+      ? `恭喜 ${currentPlayer.name} 吃掉 ${capturedNames.join('、')}，可以再掷一次。`
+      : `${currentPlayer.name} 吃掉 ${capturedNames.join('、')}。`;
     nextState = appendLog(
       nextState,
-      `${currentPlayer.name}吃掉 ${capturedPieces.map((captured) => `${getPlayerById(state, captured.playerId).name}${captured.index + 1}号`).join('、')}。`,
+      `${currentPlayer.name}吃掉 ${capturedNames.join('、')}。`,
       'danger',
     );
+    nextState = withGlobalNotice(
+      nextState,
+      captureNotice,
+      'danger',
+    );
+  } else if (canRollAgain) {
+    nextState = appendLog(nextState, `恭喜 ${currentPlayer.name} 掷出 6，可以再掷一次。`, 'success');
+    nextState = withGlobalNotice(nextState, `恭喜 ${currentPlayer.name} 掷出 6，可以再掷一次。`, 'success');
   }
 
   if (preview.wouldHome) {
@@ -501,7 +555,7 @@ export function movePieceToReachableCell(state: GameState, piece: Piece, reachab
     nextState = appendLog(nextState, `${currentPlayer.name}获胜。`, 'success');
   }
 
-  if (!winnerId && capturedPieces.length === 0) {
+  if (!winnerId && !canRollAgain) {
     nextState = finishTurn(nextState);
   }
 

@@ -18,7 +18,7 @@ import { GameCanvas } from './components/GameCanvas';
 import { LobbySlot, RoomLobby } from './components/RoomLobby';
 import { RulesScreen } from './components/RulesScreen';
 import { StartScreen } from './components/StartScreen';
-import { PLAYER_CONFIGS, PLAYER_ORDER } from './game/constants';
+import { PLAYER_CONFIGS, PLAYER_ORDER, TURN_TIMEOUT_MS } from './game/constants';
 import { createInitialState, gameReducer } from './game/reducer';
 import type { GameAction } from './game/reducer';
 import { getCurrentPlayer } from './game/rules';
@@ -56,12 +56,58 @@ function clearSavedSession() {
 }
 
 function sanitizeSyncedGameState(gameState: GameState): GameState {
+  const timestamp = Date.now();
   return {
     ...gameState,
     selectedPieceId: null,
     moveDraft: null,
     reachableCells: [],
     notice: null,
+    startedAt: gameState.startedAt ?? timestamp,
+    turnStartedAt: gameState.turnStartedAt ?? timestamp,
+  };
+}
+
+function moveAnimationKey(gameState: GameState): string {
+  const move = gameState.lastMove;
+  if (!move) {
+    return '';
+  }
+
+  return [
+    move.id,
+    move.playerId,
+    move.pieceId,
+    `${move.from.x},${move.from.y}`,
+    `${move.final.x},${move.final.y}`,
+    move.path.map((coord) => `${coord.x},${coord.y}`).join('|'),
+    move.capturedPieceIds.join('|'),
+  ].join('/');
+}
+
+function prepareSyncedGameState(
+  gameState: GameState,
+  previousState: GameState,
+  localPlayerId?: PlayerId | null,
+): GameState {
+  const sanitized = sanitizeSyncedGameState(gameState);
+  if (!sanitized.lastMove || sanitized.lastMove.playerId === localPlayerId) {
+    return sanitized;
+  }
+
+  if (moveAnimationKey(sanitized) === moveAnimationKey(previousState)) {
+    return {
+      ...sanitized,
+      lastMove: previousState.lastMove,
+    };
+  }
+
+  return {
+    ...sanitized,
+    lastMove: {
+      ...sanitized.lastMove,
+      timestamp: Date.now(),
+    },
   };
 }
 
@@ -130,6 +176,7 @@ function App() {
   const [state, setState] = useState<GameState>(() => createInitialState());
 
   const stateRef = useRef(state);
+  const slotsRef = useRef(slots);
   const matchIdRef = useRef(matchId);
   const matchVersionRef = useRef(matchVersion);
   const browserUserRef = useRef(browserUser);
@@ -138,6 +185,12 @@ function App() {
 
   const currentPlayer = getCurrentPlayer(state);
   const winner = state.winnerId ? state.players.find((player) => player.id === state.winnerId) : null;
+  const visibleNotice =
+    state.notice && state.globalNotice
+      ? state.notice.id >= state.globalNotice.id
+        ? state.notice
+        : state.globalNotice
+      : state.notice ?? state.globalNotice;
   const localSlot = findLocalSlot(slots, browserUser?.id);
   const localPlayerId = localSlot?.id ?? null;
   const isSyncedGame = Boolean(matchId);
@@ -152,6 +205,10 @@ function App() {
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
+
+  useEffect(() => {
+    slotsRef.current = slots;
+  }, [slots]);
 
   useEffect(() => {
     matchIdRef.current = matchId;
@@ -171,6 +228,17 @@ function App() {
     setState(nextState);
     setMatchVersion(version);
   }, []);
+
+  const getLocalPlayerId = useCallback((): PlayerId | null => {
+    return findLocalSlot(slotsRef.current, browserUserRef.current?.id)?.id ?? null;
+  }, []);
+
+  const hydrateSyncedGameState = useCallback(
+    (nextState: GameState, version = matchVersionRef.current) => {
+      hydrateGameState(prepareSyncedGameState(nextState, stateRef.current, getLocalPlayerId()), version);
+    },
+    [getLocalPlayerId, hydrateGameState],
+  );
 
   const loadMatchState = useCallback(
     async (nextMatchId: string, enterGame = false) => {
@@ -193,13 +261,13 @@ function App() {
       if (match.roomCode ?? roomCode) {
         saveSession({ roomCode: match.roomCode ?? roomCode, matchId: match.id });
       }
-      hydrateGameState(sanitizeSyncedGameState(match.gameState), match.stateVersion);
+      hydrateSyncedGameState(match.gameState, match.stateVersion);
       if (enterGame) {
         setMessage('');
         setView('game');
       }
     },
-    [hydrateGameState],
+    [hydrateSyncedGameState],
   );
 
   const flushQueuedGameState = useCallback(
@@ -223,7 +291,7 @@ function App() {
           matchVersionRef.current = match.stateVersion;
           setMatchVersion(match.stateVersion);
           if (!queuedStateRef.current) {
-            hydrateGameState(match.gameState, match.stateVersion);
+            hydrateSyncedGameState(match.gameState, match.stateVersion);
           }
         }
       } catch (error) {
@@ -241,7 +309,7 @@ function App() {
         }
       }
     },
-    [hydrateGameState, loadMatchState],
+    [hydrateSyncedGameState, loadMatchState],
   );
 
   const pushGameState = useCallback(
@@ -410,14 +478,14 @@ function App() {
             !syncInFlightRef.current &&
             !queuedStateRef.current
           ) {
-            hydrateGameState(sanitizeSyncedGameState(match.gameState), match.stateVersion);
+            hydrateSyncedGameState(match.gameState, match.stateVersion);
           }
         })
         .catch(() => undefined);
     }, 800);
 
     return () => window.clearInterval(timer);
-  }, [hydrateGameState, matchId, view]);
+  }, [hydrateSyncedGameState, matchId, view]);
 
   useEffect(() => {
     if (
@@ -437,6 +505,7 @@ function App() {
     currentPlayer.isHuman,
     isSyncedGame,
     state.currentPlayerIndex,
+    state.lastMove?.id,
     state.stage,
     state.turnNumber,
     state.winnerId,
@@ -458,6 +527,35 @@ function App() {
     isSyncedGame,
     state.lastMove?.id,
     state.stage,
+    state.winnerId,
+    view,
+  ]);
+
+  useEffect(() => {
+    if (
+      view !== 'game' ||
+      isSyncedGame ||
+      state.winnerId ||
+      !currentPlayer.isHuman ||
+      state.stage === 'End' ||
+      state.stage === 'Battle'
+    ) {
+      return;
+    }
+
+    const elapsed = Date.now() - (state.turnStartedAt ?? Date.now());
+    const delay = Math.max(0, TURN_TIMEOUT_MS - elapsed);
+    const timer = window.setTimeout(() => applyGameAction({ type: 'TIMEOUT_AI_TURN' }), delay);
+    return () => window.clearTimeout(timer);
+  }, [
+    applyGameAction,
+    currentPlayer.id,
+    currentPlayer.isHuman,
+    isSyncedGame,
+    state.currentPlayerIndex,
+    state.lastMove?.id,
+    state.stage,
+    state.turnStartedAt,
     state.winnerId,
     view,
   ]);
@@ -712,9 +810,9 @@ function App() {
         </main>
       )}
 
-      {view === 'game' && state.notice && (
-        <div key={state.notice.id} className={`center-notice ${state.notice.tone}`}>
-          {state.notice.text}
+      {view === 'game' && visibleNotice && (
+        <div key={`${visibleNotice.id}-${visibleNotice.text}`} className={`center-notice ${visibleNotice.tone}`}>
+          {visibleNotice.text}
         </div>
       )}
 

@@ -1,4 +1,5 @@
-import { PIECES_PER_PLAYER, STAGE_LABELS, TILE_LABELS } from '../game/constants';
+import { useEffect, useState } from 'react';
+import { PIECES_PER_PLAYER, STAGE_LABELS, TILE_LABELS, TURN_TIMEOUT_MS } from '../game/constants';
 import {
   getActiveCount,
   getCurrentPlayer,
@@ -15,6 +16,26 @@ interface ControlPanelProps {
   canRestart: boolean;
   onRoll: () => void;
   onRestart: () => void;
+}
+
+const LEGEND_ITEMS = [
+  { key: 'empty', label: TILE_LABELS.empty },
+  { key: 'spawn', label: TILE_LABELS.spawn },
+  { key: 'goal', label: TILE_LABELS.goal },
+  { key: 'home-band', label: '家门区' },
+  { key: 'center', label: TILE_LABELS.center },
+  { key: 'safe', label: TILE_LABELS.safe },
+  { key: 'boost', label: TILE_LABELS.boost },
+  { key: 'trap', label: TILE_LABELS.trap },
+  { key: 'portal', label: TILE_LABELS.portal },
+  { key: 'obstacle', label: TILE_LABELS.obstacle },
+] as const;
+
+function formatDuration(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
 function PlayerRow({ player, state }: { player: Player; state: GameState }) {
@@ -44,6 +65,7 @@ function PlayerRow({ player, state }: { player: Player; state: GameState }) {
 }
 
 export function ControlPanel({ state, canAct, canRestart, onRoll, onRestart }: ControlPanelProps) {
+  const [now, setNow] = useState(() => Date.now());
   const currentPlayer = getCurrentPlayer(state);
   const selectedPiece = state.selectedPieceId ? getPieceById(state, state.selectedPieceId) : null;
   const selectableCount = getSelectablePieceIds(state).length;
@@ -52,6 +74,17 @@ export function ControlPanel({ state, canAct, canRestart, onRoll, onRestart }: C
       ? `${state.reachableCells.length} 个可走下一格`
       : '未选择目标';
   const canRoll = canAct && currentPlayer.isHuman && state.stage === 'Roll' && !state.winnerId;
+  const startedAt = state.startedAt ?? now;
+  const turnStartedAt = state.turnStartedAt ?? now;
+  const elapsedText = formatDuration(now - startedAt);
+  const remainingSeconds = state.winnerId
+    ? 0
+    : Math.max(0, Math.ceil((turnStartedAt + TURN_TIMEOUT_MS - now) / 1000));
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 500);
+    return () => window.clearInterval(timer);
+  }, []);
 
   return (
     <aside className="control-panel">
@@ -79,6 +112,14 @@ export function ControlPanel({ state, canAct, canRestart, onRoll, onRestart }: C
           <div>
             <span className="metric-label">轮次</span>
             <strong>{state.turnNumber}</strong>
+          </div>
+          <div>
+            <span className="metric-label">时长</span>
+            <strong>{elapsedText}</strong>
+          </div>
+          <div>
+            <span className="metric-label">倒计时</span>
+            <strong className={remainingSeconds <= 5 && !state.winnerId ? 'timer-danger' : ''}>{remainingSeconds}s</strong>
           </div>
         </div>
 
@@ -126,10 +167,10 @@ export function ControlPanel({ state, canAct, canRestart, onRoll, onRestart }: C
           <h2>格子</h2>
         </div>
         <div className="legend-grid">
-          {(['safe', 'boost', 'trap', 'portal', 'goal', 'obstacle'] as const).map((tileType) => (
-            <div key={tileType} className="legend-item">
-              <span className={`legend-swatch ${tileType}`} />
-              <span>{TILE_LABELS[tileType]}</span>
+          {LEGEND_ITEMS.map((item) => (
+            <div key={item.key} className="legend-item">
+              <span className={`legend-swatch ${item.key}`} />
+              <span>{item.label}</span>
             </div>
           ))}
         </div>

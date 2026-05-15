@@ -86,16 +86,51 @@ function roundedRect(ctx: CanvasRenderingContext2D, x: number, y: number, width:
   ctx.closePath();
 }
 
-function drawTile(ctx: CanvasRenderingContext2D, cell: Cell, metrics: BoardMetrics, players: Player[]) {
+function colorWithAlpha(hex: string, alpha: number): string {
+  const value = hex.replace('#', '');
+  const bigint = Number.parseInt(value.length === 3 ? value.split('').map((char) => char + char).join('') : value, 16);
+  const red = (bigint >> 16) & 255;
+  const green = (bigint >> 8) & 255;
+  const blue = bigint & 255;
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+}
+
+function getHomeBandOwner(state: GameState, coord: Coord): Player | undefined {
+  return state.players.find((player) => {
+    const goals = state.board.goalCells[player.id];
+    const minX = Math.min(...goals.map((goal) => goal.x));
+    const maxX = Math.max(...goals.map((goal) => goal.x));
+    const minY = Math.min(...goals.map((goal) => goal.y));
+    const maxY = Math.max(...goals.map((goal) => goal.y));
+    const touchesTopOrBottom = minY === 0 || maxY === state.board.size - 1;
+
+    return touchesTopOrBottom
+      ? coord.y >= minY && coord.y <= maxY
+      : coord.x >= minX && coord.x <= maxX;
+  });
+}
+
+function drawTile(ctx: CanvasRenderingContext2D, cell: Cell, metrics: BoardMetrics, state: GameState) {
   const x = metrics.offsetX + cell.coord.x * metrics.cellSize;
   const y = metrics.offsetY + cell.coord.y * metrics.cellSize;
-  const owner = cell.ownerId ? players.find((player) => player.id === cell.ownerId) : undefined;
+  const owner = cell.ownerId ? state.players.find((player) => player.id === cell.ownerId) : undefined;
+  const homeBandOwner = getHomeBandOwner(state, cell.coord);
 
   ctx.save();
   const portalColor = cell.type === 'portal' && cell.portalId ? PORTAL_COLORS[cell.portalId] : undefined;
   ctx.fillStyle =
-    portalColor?.fill ?? (owner && (cell.type === 'spawn' || cell.type === 'goal') ? owner.accent : TILE_COLORS[cell.type]);
+    portalColor?.fill ??
+    (owner && (cell.type === 'spawn' || cell.type === 'goal')
+      ? owner.accent
+      : homeBandOwner && cell.type === 'empty'
+        ? colorWithAlpha(homeBandOwner.color, 0.14)
+        : TILE_COLORS[cell.type]);
   ctx.fillRect(x, y, metrics.cellSize, metrics.cellSize);
+
+  if (homeBandOwner && cell.type === 'empty') {
+    ctx.fillStyle = colorWithAlpha(homeBandOwner.color, 0.08);
+    ctx.fillRect(x + 3, y + 3, metrics.cellSize - 6, metrics.cellSize - 6);
+  }
 
   if (cell.type === 'center') {
     ctx.fillStyle = 'rgba(120, 113, 108, 0.10)';
@@ -117,8 +152,14 @@ function drawTile(ctx: CanvasRenderingContext2D, cell: Cell, metrics: BoardMetri
     ctx.fillText(label, x + metrics.cellSize / 2, y + metrics.cellSize / 2);
   }
 
-  ctx.strokeStyle = portalColor?.stroke ?? (owner && cell.type === 'goal' ? owner.color : 'rgba(100, 116, 139, 0.20)');
-  ctx.lineWidth = cell.type === 'goal' || portalColor ? 2 : 1;
+  ctx.strokeStyle =
+    portalColor?.stroke ??
+    (owner && cell.type === 'goal'
+      ? owner.color
+      : homeBandOwner && cell.type === 'empty'
+        ? colorWithAlpha(homeBandOwner.color, 0.38)
+        : 'rgba(100, 116, 139, 0.20)');
+  ctx.lineWidth = cell.type === 'goal' || portalColor || (homeBandOwner && cell.type === 'empty') ? 2 : 1;
   ctx.strokeRect(x, y, metrics.cellSize, metrics.cellSize);
   ctx.restore();
 }
@@ -170,6 +211,10 @@ function drawHighlights(
   }
 }
 
+function getMoveAnimationDuration(pathLength: number): number {
+  return Math.min(1900, Math.max(420, pathLength * 180));
+}
+
 function getAnimationPosition(state: GameState, piece: Piece, metrics: BoardMetrics, now: number): Coord | null {
   const lastMove = state.lastMove;
   if (!lastMove || lastMove.pieceId !== piece.id) {
@@ -177,7 +222,7 @@ function getAnimationPosition(state: GameState, piece: Piece, metrics: BoardMetr
   }
 
   const elapsed = now - lastMove.timestamp;
-  const duration = Math.max(260, lastMove.path.length * 95);
+  const duration = getMoveAnimationDuration(lastMove.path.length);
   if (elapsed >= duration || lastMove.path.length === 0) {
     return null;
   }
@@ -222,7 +267,8 @@ function drawMovePath(ctx: CanvasRenderingContext2D, state: GameState, metrics: 
   }
 
   const elapsed = now - lastMove.timestamp;
-  if (elapsed > 1200) {
+  const duration = getMoveAnimationDuration(lastMove.path.length);
+  if (elapsed > duration + 450) {
     return;
   }
 
@@ -244,7 +290,7 @@ function drawMovePath(ctx: CanvasRenderingContext2D, state: GameState, metrics: 
 
   if (lastMove.capturedPieceIds.length > 0) {
     const capturePoint = cellCenter(metrics, lastMove.final);
-    const pulse = Math.min(1, elapsed / 700);
+    const pulse = Math.min(1, elapsed / Math.max(700, duration));
     ctx.strokeStyle = `rgba(220, 38, 38, ${1 - pulse * 0.75})`;
     ctx.lineWidth = 4;
     ctx.beginPath();
@@ -350,7 +396,7 @@ function drawBoard(
   ctx.fill();
   ctx.restore();
 
-  state.board.cells.forEach((cell) => drawTile(ctx, cell, metrics, state.players));
+  state.board.cells.forEach((cell) => drawTile(ctx, cell, metrics, state));
   drawHighlights(ctx, state, metrics, hover, selectablePieceIds);
   drawMovePath(ctx, state, metrics, now);
   drawPieces(ctx, state, metrics, now);
@@ -421,7 +467,8 @@ export function GameCanvas({ state, canInteract, onPieceClick, onCellClick }: Ga
       const now = Date.now();
       drawBoard(ctx, state, metrics, hover, selectablePieceIds, now);
 
-      const shouldAnimate = state.lastMove && now - state.lastMove.timestamp < 1300;
+      const animationWindow = state.lastMove ? getMoveAnimationDuration(state.lastMove.path.length) + 500 : 0;
+      const shouldAnimate = state.lastMove && now - state.lastMove.timestamp < animationWindow;
       if (shouldAnimate) {
         frame = requestAnimationFrame(render);
       }
@@ -470,6 +517,7 @@ export function GameCanvas({ state, canInteract, onPieceClick, onCellClick }: Ga
 
   const hoverLabel = hover ? getCellDisplayLabel(state.board, hover.coord) : '';
   const hoverCell = hover ? getCell(state.board, hover.coord) : null;
+  const hoverHomeBandOwner = hover ? getHomeBandOwner(state, hover.coord) : null;
 
   return (
     <div className="canvas-wrap" ref={wrapRef}>
@@ -490,6 +538,7 @@ export function GameCanvas({ state, canInteract, onPieceClick, onCellClick }: Ga
         >
           <strong>{coordKey(hover.coord)}</strong>
           <span>{TILE_LABELS[hoverCell.type]}</span>
+          {hoverHomeBandOwner && hoverCell.type === 'empty' && <span>{hoverHomeBandOwner.name}家门区</span>}
           {hoverCell.ownerId && <span>{hoverCell.ownerId}</span>}
           {hoverCell.portalId && <span>{hoverCell.portalId}</span>}
         </div>
