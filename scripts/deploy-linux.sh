@@ -15,6 +15,11 @@ NODE_ENV="production"
 NODE_BIN="${NODE_BIN:-}"
 NPM_BIN="${NPM_BIN:-}"
 NODE_HOME="${NODE_HOME:-${PRIVATE_NODE_DIR:-}}"
+AUTO_INSTALL_NODE="${AUTO_INSTALL_NODE:-1}"
+NODE_MAJOR_REQUIRED="${NODE_MAJOR_REQUIRED:-20}"
+NODE_DOWNLOAD_MAJOR="${NODE_DOWNLOAD_MAJOR:-22}"
+NODE_MIRROR="${NODE_MIRROR:-https://nodejs.org/dist}"
+PRIVATE_NODE_ROOT="${PRIVATE_NODE_ROOT:-${APP_DIR}/.node}"
 
 log() {
   printf '\033[1;36m%s\033[0m\n' "$1"
@@ -30,6 +35,87 @@ to_absolute_path() {
     /*) printf '%s\n' "$1" ;;
     *) printf '%s/%s\n' "$(pwd)" "$1" ;;
   esac
+}
+
+node_major() {
+  "$1" -p "process.versions.node.split('.')[0]"
+}
+
+resolve_node_arch() {
+  case "$(uname -m)" in
+    x86_64|amd64) printf 'x64\n' ;;
+    aarch64|arm64) printf 'arm64\n' ;;
+    armv7l) printf 'armv7l\n' ;;
+    *) fail "不支持自动安装 Node.js 的 CPU 架构：$(uname -m)。请通过 NODE_HOME 或 NODE_BIN 指定私有 Node.js。" ;;
+  esac
+}
+
+download_to_file() {
+  local url="$1"
+  local target="$2"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "${url}" -o "${target}"
+    return
+  fi
+  if command -v wget >/dev/null 2>&1; then
+    wget -q "${url}" -O "${target}"
+    return
+  fi
+  fail "未找到 curl 或 wget，无法自动下载私有 Node.js。请安装 curl/wget，或通过 NODE_HOME / NODE_BIN 指定私有 Node.js。"
+}
+
+install_private_node() {
+  [ "${AUTO_INSTALL_NODE}" = "1" ] || fail "未找到可用 Node.js，且 AUTO_INSTALL_NODE=0。请安装 Node.js ${NODE_MAJOR_REQUIRED}+，或通过 NODE_HOME / NODE_BIN 指定私有 Node.js。"
+  command -v tar >/dev/null 2>&1 || fail "未找到 tar，无法自动安装私有 Node.js。"
+
+  local target_root
+  target_root="$(to_absolute_path "${PRIVATE_NODE_ROOT}")"
+  local target_bin="${target_root}/bin/node"
+  if [ -x "${target_bin}" ]; then
+    printf '%s\n' "${target_bin}"
+    return
+  fi
+
+  local app_root
+  app_root="$(pwd)"
+  case "${target_root}" in
+    "${app_root}/.node"| "${app_root}/.node/"*) ;;
+    *) fail "自动安装 Node.js 只允许写入当前项目的 .node 目录。需要其他位置时请使用 NODE_HOME 或 NODE_BIN。" ;;
+  esac
+
+  local arch
+  arch="$(resolve_node_arch)"
+  local base_url="${NODE_MIRROR%/}/latest-v${NODE_DOWNLOAD_MAJOR}.x"
+  local tmp_dir
+  tmp_dir="$(mktemp -d)"
+  local sums_file="${tmp_dir}/SHASUMS256.txt"
+
+  log "自动下载私有 Node.js ${NODE_DOWNLOAD_MAJOR}.x (${arch}) 到 ${target_root}..." >&2
+  download_to_file "${base_url}/SHASUMS256.txt" "${sums_file}"
+
+  local archive_name
+  archive_name="$(awk -v suffix="linux-${arch}.tar.xz" '$2 ~ suffix "$" { print $2; exit }' "${sums_file}")"
+  [ -n "${archive_name}" ] || fail "Node.js 下载清单中没有 linux-${arch} 构建。"
+
+  local archive_file="${tmp_dir}/${archive_name}"
+  download_to_file "${base_url}/${archive_name}" "${archive_file}"
+
+  if command -v sha256sum >/dev/null 2>&1; then
+    local expected_hash
+    local actual_hash
+    expected_hash="$(awk -v file="${archive_name}" '$2 == file { print $1; exit }' "${sums_file}")"
+    actual_hash="$(sha256sum "${archive_file}" | awk '{ print $1 }')"
+    [ "${expected_hash}" = "${actual_hash}" ] || fail "Node.js 压缩包校验失败。"
+  fi
+
+  local extracted_dir="${tmp_dir}/${archive_name%.tar.xz}"
+  tar -xJf "${archive_file}" -C "${tmp_dir}" || fail "Node.js 解压失败，请确认系统 tar 支持 .tar.xz。"
+  [ -x "${extracted_dir}/bin/node" ] || fail "Node.js 解压失败，未找到 node 可执行文件。"
+
+  rm -rf "${target_root}"
+  mv "${extracted_dir}" "${target_root}"
+  rm -rf "${tmp_dir}"
+  printf '%s\n' "${target_bin}"
 }
 
 resolve_node_bin() {
@@ -62,7 +148,12 @@ resolve_node_bin() {
     fi
   done
 
-  command -v node >/dev/null 2>&1 || fail "未找到 Node.js。可安装系统 Node.js 20+，或通过 NODE_HOME / NODE_BIN 指定私有 Node.js。"
+  if [ "${AUTO_INSTALL_NODE}" = "1" ]; then
+    install_private_node
+    return
+  fi
+
+  command -v node >/dev/null 2>&1 || fail "未找到 Node.js。可安装系统 Node.js ${NODE_MAJOR_REQUIRED}+，或通过 NODE_HOME / NODE_BIN 指定私有 Node.js。"
   command -v node
 }
 
@@ -144,13 +235,23 @@ cd "${APP_DIR}"
 log "当前目录：$(pwd)"
 
 RESOLVED_NODE_BIN="$(resolve_node_bin)"
-RESOLVED_NPM_BIN="$(resolve_npm_bin)"
 RESOLVED_NODE_DIR="$(dirname "${RESOLVED_NODE_BIN}")"
 export PATH="${RESOLVED_NODE_DIR}:${PATH}"
-NODE_MAJOR="$("${RESOLVED_NODE_BIN}" -p "process.versions.node.split('.')[0]")"
-if [ "${NODE_MAJOR}" -lt 20 ]; then
-  fail "当前 Node.js 版本过低：$("${RESOLVED_NODE_BIN}" -v)，请使用 Node.js 20+。"
+NODE_MAJOR="$(node_major "${RESOLVED_NODE_BIN}")"
+if [ "${NODE_MAJOR}" -lt "${NODE_MAJOR_REQUIRED}" ]; then
+  if [ -n "${NODE_BIN}" ] || [ "${AUTO_INSTALL_NODE}" != "1" ]; then
+    fail "当前 Node.js 版本过低：$("${RESOLVED_NODE_BIN}" -v)，请使用 Node.js ${NODE_MAJOR_REQUIRED}+。"
+  fi
+  log "当前 Node.js 版本过低：$("${RESOLVED_NODE_BIN}" -v)，改用项目私有 Node.js。"
+  RESOLVED_NODE_BIN="$(install_private_node)"
+  RESOLVED_NODE_DIR="$(dirname "${RESOLVED_NODE_BIN}")"
+  export PATH="${RESOLVED_NODE_DIR}:${PATH}"
+  NODE_MAJOR="$(node_major "${RESOLVED_NODE_BIN}")"
+  if [ "${NODE_MAJOR}" -lt "${NODE_MAJOR_REQUIRED}" ]; then
+    fail "私有 Node.js 版本仍然过低：$("${RESOLVED_NODE_BIN}" -v)，请检查 NODE_DOWNLOAD_MAJOR。"
+  fi
 fi
+RESOLVED_NPM_BIN="$(resolve_npm_bin)"
 log "使用 Node.js：${RESOLVED_NODE_BIN} ($("${RESOLVED_NODE_BIN}" -v))"
 log "使用 npm：${RESOLVED_NPM_BIN}"
 
