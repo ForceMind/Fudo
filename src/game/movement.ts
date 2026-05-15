@@ -111,11 +111,12 @@ function evaluateStep(
   const spawnOrigin = getSpawnOrigin(board, piece);
   const currentInHomeBand = isInHomeBand(board, current, piece);
   const nextInHomeBand = isInHomeBand(board, next, piece);
+  const leavingPortal = path.length === 0 && getCell(board, current).type === 'portal';
   if (currentInHomeBand && !nextInHomeBand) {
     return { reason: '已经进入家门区，不能再离开。' };
   }
 
-  if (!currentInHomeBand && distanceFromOrigin(next, spawnOrigin) <= distanceFromOrigin(current, spawnOrigin)) {
+  if (!currentInHomeBand && !leavingPortal && distanceFromOrigin(next, spawnOrigin) <= distanceFromOrigin(current, spawnOrigin)) {
     return { reason: '不能折返，只能往远离出生地的方向走。' };
   }
 
@@ -297,11 +298,12 @@ export function getReachableCells(board: Board, pieces: Piece[], piece: Piece, p
 
       const currentInHomeBand = isInHomeBand(board, current.coord, piece);
       const nextInHomeBand = isInHomeBand(board, next, piece);
+      const leavingPortal = current.path.length === 0 && getCell(board, current.coord).type === 'portal';
       if (currentInHomeBand && !nextInHomeBand) {
         return;
       }
 
-      if (!currentInHomeBand && distanceFromOrigin(next, spawnOrigin) <= distanceFromOrigin(current.coord, spawnOrigin)) {
+      if (!currentInHomeBand && !leavingPortal && distanceFromOrigin(next, spawnOrigin) <= distanceFromOrigin(current.coord, spawnOrigin)) {
         return;
       }
 

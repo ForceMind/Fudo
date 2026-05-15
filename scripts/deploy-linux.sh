@@ -352,6 +352,8 @@ Type=simple
 WorkingDirectory=$(pwd)
 Environment=NODE_ENV=${NODE_ENV}
 Environment=PORT=${PORT}
+Environment=ADMIN_TOKEN=${ADMIN_TOKEN:-}
+Environment=ADMIN_HOSTS=${ADMIN_HOSTS:-${ADMIN_HOST:-}}
 Environment=LANG=${LANG}
 Environment=LC_ALL=${LC_ALL}
 Environment=PATH=${RESOLVED_NODE_DIR}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin

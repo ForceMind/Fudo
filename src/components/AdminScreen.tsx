@@ -14,7 +14,7 @@ function formatTime(value?: string | null): string {
 
 export function AdminScreen({ onBack }: AdminScreenProps) {
   const [summary, setSummary] = useState<AdminSummary | null>(null);
-  const [token, setToken] = useState('');
+  const [token, setToken] = useState(() => new URLSearchParams(window.location.search).get('token') ?? '');
   const [message, setMessage] = useState('加载中...');
 
   const loadSummary = async (nextToken = token) => {
@@ -29,7 +29,7 @@ export function AdminScreen({ onBack }: AdminScreenProps) {
   };
 
   useEffect(() => {
-    void loadSummary('');
+    void loadSummary(token);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -45,7 +45,7 @@ export function AdminScreen({ onBack }: AdminScreenProps) {
             className="text-input admin-token"
             value={token}
             onChange={(event) => setToken(event.target.value)}
-            placeholder="ADMIN_TOKEN，可选"
+            placeholder="ADMIN_TOKEN"
           />
           <button className="secondary-button" type="button" onClick={() => void loadSummary()}>
             刷新

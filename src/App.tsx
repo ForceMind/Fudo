@@ -25,6 +25,45 @@ import { getCurrentPlayer } from './game/rules';
 import type { GameState, PlayerConfigInput, PlayerId } from './game/types';
 
 type AppView = 'home' | 'lobby' | 'rules' | 'game' | 'admin';
+const sessionKey = 'fudo-active-session';
+const isAdminEntry =
+  window.location.pathname.replace(/\/+$/, '') === '/admin' || window.location.hostname.toLowerCase().startsWith('admin.');
+
+interface SavedSession {
+  roomCode: string;
+  matchId?: string | null;
+}
+
+function readSavedSession(): SavedSession | null {
+  const raw = window.localStorage.getItem(sessionKey);
+  if (!raw) {
+    return null;
+  }
+  try {
+    const session = JSON.parse(raw) as SavedSession;
+    return session.roomCode || session.matchId ? session : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveSession(session: SavedSession) {
+  window.localStorage.setItem(sessionKey, JSON.stringify(session));
+}
+
+function clearSavedSession() {
+  window.localStorage.removeItem(sessionKey);
+}
+
+function sanitizeSyncedGameState(gameState: GameState): GameState {
+  return {
+    ...gameState,
+    selectedPieceId: null,
+    moveDraft: null,
+    reachableCells: [],
+    notice: null,
+  };
+}
 
 function createEmptySlots(): Record<PlayerId, LobbySlot | null> {
   return {
@@ -71,7 +110,7 @@ function findLocalSlot(slots: Record<PlayerId, LobbySlot | null>, userId?: strin
 }
 
 function App() {
-  const [view, setView] = useState<AppView>('home');
+  const [view, setView] = useState<AppView>(isAdminEntry ? 'admin' : 'home');
   const [returnView, setReturnView] = useState<AppView>('home');
   const [roomCode, setRoomCode] = useState('');
   const [hostName, setHostName] = useState('房主');
@@ -144,7 +183,10 @@ function App() {
 
       setMatchId(match.id);
       matchIdRef.current = match.id;
-      hydrateGameState(match.gameState, match.stateVersion);
+      if (match.roomCode ?? roomCode) {
+        saveSession({ roomCode: match.roomCode ?? roomCode, matchId: match.id });
+      }
+      hydrateGameState(sanitizeSyncedGameState(match.gameState), match.stateVersion);
       if (enterGame) {
         setMessage('');
         setView('game');
@@ -197,7 +239,7 @@ function App() {
 
   const pushGameState = useCallback(
     (nextState: GameState) => {
-      queuedStateRef.current = nextState;
+      queuedStateRef.current = sanitizeSyncedGameState(nextState);
       void flushQueuedGameState();
     },
     [flushQueuedGameState],
@@ -211,11 +253,56 @@ function App() {
       }
 
       hydrateGameState(nextState);
-      if (sync) {
+      const shouldSync =
+        sync &&
+        matchIdRef.current &&
+        (action.type === 'ROLL_DICE' ||
+          action.type === 'FINISH_BATTLE' ||
+          action.type === 'AI_TURN' ||
+          (action.type === 'MOVE_TO' && nextState.stage !== 'Move'));
+
+      if (shouldSync) {
         void pushGameState(nextState);
       }
     },
     [hydrateGameState, pushGameState],
+  );
+
+  const restoreSavedSession = useCallback(
+    async (user: BrowserUser) => {
+      if (isAdminEntry) {
+        return;
+      }
+
+      const savedSession = readSavedSession();
+      if (!savedSession?.roomCode) {
+        return;
+      }
+
+      try {
+        const room = await getServerRoom(savedSession.roomCode);
+        const restoredSlot = findLocalSlot(room.slots, user.id);
+        if (!restoredSlot) {
+          clearSavedSession();
+          return;
+        }
+
+        setRoomCode(room.code);
+        setJoinCode(room.code);
+        setSlots(room.slots);
+        setStartRequested(Boolean(room.startRequested));
+        if (room.status === 'active' && (room.matchId || savedSession.matchId)) {
+          await loadMatchState(room.matchId ?? savedSession.matchId!, true);
+          return;
+        }
+
+        setMessage(`已回到房间 ${room.code}。`);
+        setView('lobby');
+      } catch {
+        clearSavedSession();
+      }
+    },
+    [loadMatchState],
   );
 
   useEffect(() => {
@@ -223,8 +310,9 @@ function App() {
       setBrowserUser(user);
       setNicknameDraft(user.nickname);
       setHostName(user.nickname);
+      void restoreSavedSession(user);
     });
-  }, []);
+  }, [restoreSavedSession]);
 
   const refreshRooms = async (showLoading = false) => {
     if (showLoading) {
@@ -292,7 +380,7 @@ function App() {
             !syncInFlightRef.current &&
             !queuedStateRef.current
           ) {
-            hydrateGameState(match.gameState, match.stateVersion);
+            hydrateGameState(sanitizeSyncedGameState(match.gameState), match.stateVersion);
           }
         })
         .catch(() => undefined);
@@ -370,12 +458,14 @@ function App() {
       setJoinCode(room?.code ?? localRoomCode);
       setSlots(room?.slots ?? fallbackSlots);
       setStartRequested(Boolean(room?.startRequested));
+      saveSession({ roomCode: room?.code ?? localRoomCode, matchId: null });
       setMessage(`房间 ${room?.code ?? localRoomCode} 已创建，等待其他玩家加入。`);
     } catch {
       setRoomCode(localRoomCode);
       setJoinCode(localRoomCode);
       setSlots(fallbackSlots);
       setStartRequested(false);
+      saveSession({ roomCode: localRoomCode, matchId: null });
       setMessage(`离线房间 ${localRoomCode} 已创建。生产服务启动后会自动记录房间。`);
     }
     setView('lobby');
@@ -399,6 +489,7 @@ function App() {
       setJoinCode(room.code);
       setSlots(room.slots);
       setStartRequested(Boolean(room.startRequested));
+      saveSession({ roomCode: room.code, matchId: room.matchId ?? null });
       setMessage(`${browserUser.nickname} 已加入房间 ${room.code}。`);
       setView('lobby');
     } catch (error) {
@@ -435,6 +526,7 @@ function App() {
         setSlots(room.slots);
         setStartRequested(Boolean(room.startRequested));
         if (match?.id) {
+          saveSession({ roomCode, matchId: match.id });
           await loadMatchState(match.id, true);
         } else {
           setMessage('已请求开始，等待真人玩家准备。');
@@ -448,6 +540,7 @@ function App() {
 
     setMatchId(null);
     matchIdRef.current = null;
+    clearSavedSession();
     hydrateGameState(initialState, 0);
     setMessage('');
     setView('game');
@@ -458,6 +551,21 @@ function App() {
       return;
     }
     hydrateGameState(createInitialState(gamePlayers), 0);
+  };
+
+  const exitGame = () => {
+    if (!window.confirm('退出当前游戏？退出后刷新不会自动回到这局游戏。')) {
+      return;
+    }
+
+    clearSavedSession();
+    queuedStateRef.current = null;
+    setMatchId(null);
+    matchIdRef.current = null;
+    setMatchVersion(0);
+    matchVersionRef.current = 0;
+    setView('home');
+    setMessage('已退出当前游戏。');
   };
 
   const headerChip =
@@ -481,15 +589,10 @@ function App() {
           <button className="secondary-button header-button" type="button" onClick={() => void saveNickname()}>
             保存昵称
           </button>
-          {view !== 'admin' && (
-            <button className="secondary-button header-button" type="button" onClick={() => setView('admin')}>
-              后台
-            </button>
-          )}
           {view === 'game' && (
             <>
-              <button className="secondary-button header-button" type="button" onClick={() => setView('lobby')}>
-                大厅
+              <button className="secondary-button header-button" type="button" onClick={exitGame}>
+                退出游戏
               </button>
               <button className="secondary-button header-button" type="button" onClick={openRules}>
                 规则
@@ -536,7 +639,14 @@ function App() {
 
       {view === 'rules' && <RulesScreen onBack={() => setView(returnView)} />}
 
-      {view === 'admin' && <AdminScreen onBack={() => setView('home')} />}
+      {view === 'admin' && (
+        <AdminScreen
+          onBack={() => {
+            window.history.pushState(null, '', '/');
+            setView('home');
+          }}
+        />
+      )}
 
       {view === 'game' && (
         <main className="game-layout">

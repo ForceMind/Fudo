@@ -107,7 +107,10 @@ export function getActivePiecesAt(state: GameState, coord: Coord, exceptPieceId?
 }
 
 export function isPieceSelectable(state: GameState, piece: Piece): boolean {
-  if (state.stage !== 'Select') {
+  const canChoosePiece =
+    state.stage === 'Select' || (state.stage === 'Move' && (state.moveDraft?.path.length ?? 0) === 0);
+
+  if (!canChoosePiece) {
     return false;
   }
 

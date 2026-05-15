@@ -12,6 +12,10 @@ const defaultDataFile = existsSync(legacyDataFile) ? legacyDataFile : join(rootD
 const dataFile = resolve(process.env.FUDO_DATA_FILE ?? process.env.DICE_ARENA_DATA_FILE ?? defaultDataFile);
 const port = Number(process.env.PORT ?? 8787);
 const adminToken = process.env.ADMIN_TOKEN ?? '';
+const adminHosts = String(process.env.ADMIN_HOSTS ?? process.env.ADMIN_HOST ?? '')
+  .split(',')
+  .map((host) => host.trim().toLowerCase())
+  .filter(Boolean);
 
 const contentTypes = {
   '.html': 'text/html; charset=utf-8',
@@ -60,6 +64,20 @@ function readDb() {
 function writeDb(db) {
   mkdirSync(dirname(dataFile), { recursive: true });
   writeFileSync(dataFile, JSON.stringify(db, null, 2), 'utf8');
+}
+
+function sanitizeGameStateForStorage(gameState) {
+  if (!gameState || typeof gameState !== 'object') {
+    return gameState;
+  }
+
+  return {
+    ...gameState,
+    selectedPieceId: null,
+    moveDraft: null,
+    reachableCells: [],
+    notice: null,
+  };
 }
 
 function sendJson(res, status, payload) {
@@ -145,7 +163,7 @@ function createMatchFromRoom(room) {
     winner: null,
     turnNumber: 1,
     players: Array.isArray(room.pendingPlayers) ? room.pendingPlayers : [],
-    gameState: room.pendingGameState ?? null,
+    gameState: sanitizeGameStateForStorage(room.pendingGameState ?? null),
     stateVersion: 1,
   };
 
@@ -231,11 +249,19 @@ function createRoomCode(db) {
   return randomUUID().slice(0, 6).toUpperCase();
 }
 
+function getRequestHost(req) {
+  return String(req.headers['x-forwarded-host'] ?? req.headers.host ?? '')
+    .split(',')[0]
+    .trim()
+    .replace(/:\d+$/, '')
+    .toLowerCase();
+}
+
 function isAdminRequest(req, url) {
-  if (!adminToken) {
-    return true;
-  }
-  return req.headers['x-admin-token'] === adminToken || url.searchParams.get('token') === adminToken;
+  const hostAllowed = adminHosts.length === 0 || adminHosts.includes(getRequestHost(req));
+  const tokenAllowed =
+    Boolean(adminToken) && (req.headers['x-admin-token'] === adminToken || url.searchParams.get('token') === adminToken);
+  return hostAllowed && tokenAllowed;
 }
 
 function publicUser(user) {
@@ -439,7 +465,7 @@ async function handleApi(req, res, url) {
 
       room.startRequested = true;
       room.pendingPlayers = body.players;
-      room.pendingGameState = body.gameState;
+      room.pendingGameState = sanitizeGameStateForStorage(body.gameState);
       room.updatedAt = now();
       const match = maybeStartRoom(db, room);
       writeDb(db);
@@ -472,7 +498,7 @@ async function handleApi(req, res, url) {
         winner: null,
         turnNumber: 1,
         players: Array.isArray(body.players) ? body.players : [],
-        gameState: body.gameState ?? null,
+        gameState: sanitizeGameStateForStorage(body.gameState ?? null),
         stateVersion: 1,
       };
     db.matches.unshift(match);
@@ -526,7 +552,7 @@ async function handleApi(req, res, url) {
         return;
       }
 
-      match.gameState = body.gameState;
+      match.gameState = sanitizeGameStateForStorage(body.gameState);
       match.stateVersion = Number(match.stateVersion ?? 0) + 1;
       match.turnNumber = Number(body.gameState.turnNumber ?? match.turnNumber ?? 1);
       match.updatedAt = now();
