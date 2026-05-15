@@ -99,6 +99,128 @@ function roomSlotsToArray(slots = {}) {
   return ['red', 'blue', 'green', 'yellow'].map((playerId) => slots[playerId]).filter(Boolean);
 }
 
+function publicRoomSummary(room) {
+  const players = roomSlotsToArray(room.slots).map((slot) => ({
+    id: slot.id,
+    name: slot.name,
+    isHost: Boolean(slot.isHost),
+    ready: Boolean(slot.ready),
+  }));
+  const host = players.find((player) => player.isHost) ?? players[0] ?? null;
+  return {
+    code: room.code,
+    status: room.status,
+    createdAt: room.createdAt,
+    updatedAt: room.updatedAt,
+    hostName: host?.name ?? '房主',
+    playerCount: players.length,
+    capacity: 4,
+    players,
+    startRequested: Boolean(room.startRequested),
+  };
+}
+
+function getHostSlot(room) {
+  return roomSlotsToArray(room.slots).find((slot) => slot.isHost) ?? null;
+}
+
+function allJoinedPlayersReady(room) {
+  return roomSlotsToArray(room.slots)
+    .filter((slot) => slot.isHuman && !slot.isHost)
+    .every((slot) => Boolean(slot.ready));
+}
+
+function findRoomByMatch(db, match) {
+  return db.rooms.find((room) => room.code === match.roomCode) ?? null;
+}
+
+function createMatchFromRoom(room) {
+  const match = {
+    id: `mat_${randomUUID()}`,
+    roomCode: room.code,
+    status: 'running',
+    startedAt: now(),
+    endedAt: null,
+    updatedAt: now(),
+    winner: null,
+    turnNumber: 1,
+    players: Array.isArray(room.pendingPlayers) ? room.pendingPlayers : [],
+    gameState: room.pendingGameState ?? null,
+    stateVersion: 1,
+  };
+
+  room.status = 'active';
+  room.startedAt = match.startedAt;
+  room.updatedAt = match.startedAt;
+  room.matchId = match.id;
+  room.startRequested = false;
+  delete room.pendingPlayers;
+  delete room.pendingGameState;
+
+  return match;
+}
+
+function maybeStartRoom(db, room) {
+  if (room.status !== 'waiting' || !room.startRequested || !room.pendingGameState || !allJoinedPlayersReady(room)) {
+    return null;
+  }
+
+  const match = createMatchFromRoom(room);
+  db.matches.unshift(match);
+  return match;
+}
+
+function getRoomSlotByUserId(room, userId) {
+  return roomSlotsToArray(room.slots).find((slot) => slot.userId && slot.userId === userId) ?? null;
+}
+
+function canUpdateMatchState(db, match, userId) {
+  const room = findRoomByMatch(db, match);
+  const state = match.gameState;
+  const currentPlayer = state?.players?.[state.currentPlayerIndex];
+  if (!room || !currentPlayer || !userId) {
+    return false;
+  }
+
+  if (currentPlayer.isHuman) {
+    return room.slots?.[currentPlayer.id]?.userId === userId;
+  }
+
+  const host = getHostSlot(room);
+  return host?.userId === userId || room.hostUserId === userId;
+}
+
+function applyMatchResultStats(db, match, gameState) {
+  if (!gameState?.winnerId || match.status === 'finished') {
+    return;
+  }
+
+  const room = findRoomByMatch(db, match);
+  const winnerPlayer = gameState.players?.find((player) => player.id === gameState.winnerId);
+  const winnerSlot = room?.slots?.[gameState.winnerId] ?? null;
+  match.status = 'finished';
+  match.endedAt = now();
+  match.winner = {
+    id: gameState.winnerId,
+    name: winnerPlayer?.name ?? gameState.winnerId,
+    userId: winnerSlot?.userId ?? null,
+  };
+  match.turnNumber = Number(gameState.turnNumber ?? match.turnNumber ?? 1);
+
+  const userIds = new Set((match.players ?? []).map((player) => player.userId).filter(Boolean));
+  userIds.forEach((userId) => {
+    const user = db.users.find((candidate) => candidate.id === userId);
+    if (!user) {
+      return;
+    }
+    user.gamesPlayed = (user.gamesPlayed ?? 0) + 1;
+    if (match.winner?.userId === userId) {
+      user.wins = (user.wins ?? 0) + 1;
+    }
+    user.updatedAt = now();
+  });
+}
+
 function createRoomCode(db) {
   for (let index = 0; index < 20; index += 1) {
     const code = Math.random().toString(36).slice(2, 8).toUpperCase();
@@ -185,6 +307,16 @@ async function handleApi(req, res, url) {
     return;
   }
 
+  if (req.method === 'GET' && path === '/api/rooms') {
+    const rooms = db.rooms
+      .filter((room) => room.status === 'waiting')
+      .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
+      .slice(0, 20)
+      .map(publicRoomSummary);
+    sendJson(res, 200, { rooms });
+    return;
+  }
+
   if (req.method === 'POST' && path === '/api/rooms') {
     const body = await readBody(req);
     const code = createRoomCode(db);
@@ -204,6 +336,7 @@ async function handleApi(req, res, url) {
           isHuman: true,
           isHost: true,
           userId: body.hostUserId ?? null,
+          ready: false,
         },
         blue: null,
         green: null,
@@ -216,7 +349,7 @@ async function handleApi(req, res, url) {
     return;
   }
 
-  const roomMatch = path.match(/^\/api\/rooms\/([A-Z0-9]{6})(?:\/(join|start))?$/);
+  const roomMatch = path.match(/^\/api\/rooms\/([A-Z0-9]{6})(?:\/(join|start|ready|start-request))?$/);
   if (roomMatch) {
     const code = roomMatch[1];
     const action = roomMatch[2] ?? '';
@@ -254,10 +387,63 @@ async function handleApi(req, res, url) {
         isHuman: true,
         isHost: false,
         userId,
+        ready: false,
       };
       room.updatedAt = now();
       writeDb(db);
       sendJson(res, 200, { room });
+      return;
+    }
+
+    if (req.method === 'POST' && action === 'ready') {
+      const body = await readBody(req);
+      if (room.status !== 'waiting') {
+        sendJson(res, 409, { error: '房间已开始' });
+        return;
+      }
+
+      const slot = getRoomSlotByUserId(room, body.userId ?? null);
+      if (!slot) {
+        sendJson(res, 403, { error: '你不在这个房间中' });
+        return;
+      }
+      if (slot.isHost) {
+        sendJson(res, 403, { error: '房主不需要准备' });
+        return;
+      }
+
+      slot.ready = Boolean(body.ready);
+      room.updatedAt = now();
+      const match = maybeStartRoom(db, room);
+      writeDb(db);
+      sendJson(res, 200, { room, match });
+      return;
+    }
+
+    if (req.method === 'POST' && action === 'start-request') {
+      const body = await readBody(req);
+      if (room.status !== 'waiting') {
+        sendJson(res, 409, { error: '房间已开始' });
+        return;
+      }
+
+      const host = getHostSlot(room);
+      if (!host || host.userId !== body.hostUserId) {
+        sendJson(res, 403, { error: '只有房主可以开始' });
+        return;
+      }
+      if (!body.gameState || !Array.isArray(body.players)) {
+        sendJson(res, 400, { error: '缺少对局初始状态' });
+        return;
+      }
+
+      room.startRequested = true;
+      room.pendingPlayers = body.players;
+      room.pendingGameState = body.gameState;
+      room.updatedAt = now();
+      const match = maybeStartRoom(db, room);
+      writeDb(db);
+      sendJson(res, 200, { room, match });
       return;
     }
 
@@ -276,20 +462,88 @@ async function handleApi(req, res, url) {
 
   if (req.method === 'POST' && path === '/api/matches/start') {
     const body = await readBody(req);
-    const match = {
-      id: `mat_${randomUUID()}`,
-      roomCode: body.roomCode ?? null,
-      status: 'running',
-      startedAt: now(),
-      endedAt: null,
-      winner: null,
-      turnNumber: 1,
-      players: Array.isArray(body.players) ? body.players : [],
-    };
+      const match = {
+        id: `mat_${randomUUID()}`,
+        roomCode: body.roomCode ?? null,
+        status: 'running',
+        startedAt: now(),
+        endedAt: null,
+        updatedAt: now(),
+        winner: null,
+        turnNumber: 1,
+        players: Array.isArray(body.players) ? body.players : [],
+        gameState: body.gameState ?? null,
+        stateVersion: 1,
+      };
     db.matches.unshift(match);
     writeDb(db);
     sendJson(res, 201, { match });
     return;
+  }
+
+  const matchState = path.match(/^\/api\/matches\/([^/]+)\/state$/);
+  if (matchState) {
+    const match = db.matches.find((candidate) => candidate.id === matchState[1]);
+    if (!match) {
+      sendJson(res, 404, { error: '对局不存在' });
+      return;
+    }
+
+    if (req.method === 'GET') {
+      sendJson(res, 200, {
+        match: {
+          id: match.id,
+          roomCode: match.roomCode,
+          status: match.status,
+          stateVersion: match.stateVersion ?? 0,
+          gameState: match.gameState ?? null,
+          winner: match.winner ?? null,
+        },
+      });
+      return;
+    }
+
+    if (req.method === 'POST') {
+      const body = await readBody(req);
+      if (match.status !== 'running') {
+        sendJson(res, 409, { error: '对局已结束' });
+        return;
+      }
+      if (!body.gameState) {
+        sendJson(res, 400, { error: '缺少 gameState' });
+        return;
+      }
+      if (Number(body.stateVersion) !== Number(match.stateVersion ?? 0)) {
+        sendJson(res, 409, {
+          error: '对局状态已更新，请同步后重试',
+          stateVersion: match.stateVersion ?? 0,
+          gameState: match.gameState ?? null,
+        });
+        return;
+      }
+      if (!canUpdateMatchState(db, match, body.userId ?? null)) {
+        sendJson(res, 403, { error: '现在不是你的行动回合' });
+        return;
+      }
+
+      match.gameState = body.gameState;
+      match.stateVersion = Number(match.stateVersion ?? 0) + 1;
+      match.turnNumber = Number(body.gameState.turnNumber ?? match.turnNumber ?? 1);
+      match.updatedAt = now();
+      applyMatchResultStats(db, match, body.gameState);
+      writeDb(db);
+      sendJson(res, 200, {
+        match: {
+          id: match.id,
+          roomCode: match.roomCode,
+          status: match.status,
+          stateVersion: match.stateVersion,
+          gameState: match.gameState,
+          winner: match.winner ?? null,
+        },
+      });
+      return;
+    }
   }
 
   const matchEnd = path.match(/^\/api\/matches\/([^/]+)\/end$/);

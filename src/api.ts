@@ -20,6 +20,24 @@ export interface StoredRoom {
   matchId: string | null;
   hostUserId: string | null;
   slots: Record<PlayerId, LobbySlot | null>;
+  startRequested?: boolean;
+}
+
+export interface RoomSummary {
+  code: string;
+  status: 'waiting' | 'active' | 'finished';
+  createdAt: string;
+  updatedAt: string;
+  hostName: string;
+  playerCount: number;
+  capacity: number;
+  players: Array<{
+    id: PlayerId;
+    name: string;
+    isHost: boolean;
+    ready: boolean;
+  }>;
+  startRequested: boolean;
 }
 
 export interface StoredMatch {
@@ -31,6 +49,15 @@ export interface StoredMatch {
   winner: { id: PlayerId; name: string; userId?: string | null } | null;
   turnNumber: number;
   players: Array<PlayerConfigInput & { userId?: string | null }>;
+}
+
+export interface SyncedMatchState {
+  id: string;
+  roomCode: string | null;
+  status: 'running' | 'finished';
+  stateVersion: number;
+  gameState: import('./game/types').GameState | null;
+  winner: { id: PlayerId; name: string; userId?: string | null } | null;
 }
 
 export interface AdminSummary {
@@ -144,6 +171,11 @@ export async function createServerRoom(user: BrowserUser, hostName: string): Pro
   return room;
 }
 
+export async function getWaitingRooms(): Promise<RoomSummary[]> {
+  const { rooms } = await requestJson<{ rooms: RoomSummary[] }>('/api/rooms');
+  return rooms;
+}
+
 export async function joinServerRoom(roomCode: string, user: BrowserUser): Promise<StoredRoom> {
   const { room } = await requestJson<{ room: StoredRoom }>(`/api/rooms/${roomCode}/join`, {
     method: 'POST',
@@ -152,9 +184,47 @@ export async function joinServerRoom(roomCode: string, user: BrowserUser): Promi
   return room;
 }
 
+export async function setServerRoomReady(roomCode: string, user: BrowserUser, ready: boolean): Promise<StoredRoom> {
+  const { room } = await requestJson<{ room: StoredRoom }>(`/api/rooms/${roomCode}/ready`, {
+    method: 'POST',
+    body: JSON.stringify({ userId: user.id, ready }),
+  });
+  return room;
+}
+
 export async function getServerRoom(roomCode: string): Promise<StoredRoom> {
   const { room } = await requestJson<{ room: StoredRoom }>(`/api/rooms/${roomCode}`);
   return room;
+}
+
+export async function requestServerRoomStart(
+  roomCode: string,
+  user: BrowserUser,
+  players: Array<PlayerConfigInput & { userId?: string | null }>,
+  gameState: import('./game/types').GameState,
+): Promise<{ room: StoredRoom; match: StoredMatch | null }> {
+  return requestJson<{ room: StoredRoom; match: StoredMatch | null }>(`/api/rooms/${roomCode}/start-request`, {
+    method: 'POST',
+    body: JSON.stringify({ hostUserId: user.id, players, gameState }),
+  });
+}
+
+export async function getSyncedMatchState(matchId: string): Promise<SyncedMatchState> {
+  const { match } = await requestJson<{ match: SyncedMatchState }>(`/api/matches/${matchId}/state`);
+  return match;
+}
+
+export async function updateSyncedMatchState(
+  matchId: string,
+  user: BrowserUser,
+  stateVersion: number,
+  gameState: import('./game/types').GameState,
+): Promise<SyncedMatchState> {
+  const { match } = await requestJson<{ match: SyncedMatchState }>(`/api/matches/${matchId}/state`, {
+    method: 'POST',
+    body: JSON.stringify({ userId: user.id, stateVersion, gameState }),
+  });
+  return match;
 }
 
 export async function startServerMatch(

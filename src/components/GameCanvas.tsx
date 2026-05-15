@@ -6,6 +6,7 @@ import type { Cell, Coord, GameState, Piece, Player, ReachableCell } from '../ga
 
 interface GameCanvasProps {
   state: GameState;
+  canInteract: boolean;
   onPieceClick: (pieceId: string) => void;
   onCellClick: (coord: Coord) => void;
 }
@@ -355,7 +356,7 @@ function drawBoard(
   drawPieces(ctx, state, metrics, now);
 }
 
-export function GameCanvas({ state, onPieceClick, onCellClick }: GameCanvasProps) {
+export function GameCanvas({ state, canInteract, onPieceClick, onCellClick }: GameCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const metricsRef = useRef<BoardMetrics | null>(null);
@@ -364,13 +365,16 @@ export function GameCanvas({ state, onPieceClick, onCellClick }: GameCanvasProps
 
   const selectablePieceIds = useMemo(() => {
     const ids = new Set<string>();
+    if (!canInteract) {
+      return ids;
+    }
     state.pieces.forEach((piece) => {
       if (isPieceSelectable(state, piece)) {
         ids.add(piece.id);
       }
     });
     return ids;
-  }, [state]);
+  }, [canInteract, state]);
 
   useEffect(() => {
     const wrap = wrapRef.current;
@@ -442,7 +446,7 @@ export function GameCanvas({ state, onPieceClick, onCellClick }: GameCanvasProps
   };
 
   const handleClick = () => {
-    if (!hover || state.winnerId) {
+    if (!hover || state.winnerId || !canInteract) {
       return;
     }
 

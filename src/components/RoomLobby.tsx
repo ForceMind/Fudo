@@ -7,16 +7,16 @@ export interface LobbySlot {
   isHuman: boolean;
   isHost: boolean;
   userId?: string | null;
+  ready?: boolean;
 }
 
 interface RoomLobbyProps {
   roomCode: string;
   slots: Record<PlayerId, LobbySlot | null>;
-  joinName: string;
   message: string;
-  onJoinNameChange: (value: string) => void;
-  onAddPlayer: () => void;
-  onRemovePlayer: (playerId: PlayerId) => void;
+  localUserId?: string | null;
+  startRequested: boolean;
+  onToggleReady: () => void;
   onStartGame: () => void;
   onBackHome: () => void;
   onOpenRules: () => void;
@@ -25,17 +25,25 @@ interface RoomLobbyProps {
 export function RoomLobby({
   roomCode,
   slots,
-  joinName,
   message,
-  onJoinNameChange,
-  onAddPlayer,
-  onRemovePlayer,
+  localUserId,
+  startRequested,
+  onToggleReady,
   onStartGame,
   onBackHome,
   onOpenRules,
 }: RoomLobbyProps) {
   const humanCount = PLAYER_ORDER.filter((playerId) => slots[playerId]?.isHuman).length;
-  const full = humanCount >= PLAYER_ORDER.length;
+  const localSlot = PLAYER_ORDER.map((playerId) => slots[playerId]).find((slot) => slot?.userId === localUserId) ?? null;
+  const isHost = Boolean(localSlot?.isHost);
+  const readyCount = PLAYER_ORDER.filter((playerId) => {
+    const slot = slots[playerId];
+    return slot?.isHuman && !slot.isHost && slot.ready;
+  }).length;
+  const readyTotal = PLAYER_ORDER.filter((playerId) => {
+    const slot = slots[playerId];
+    return slot?.isHuman && !slot.isHost;
+  }).length;
 
   return (
     <main className="menu-screen room-screen">
@@ -51,9 +59,11 @@ export function RoomLobby({
           <button className="secondary-button" type="button" onClick={onBackHome}>
             返回
           </button>
-          <button className="primary-button" type="button" onClick={onStartGame}>
-            房主开始
-          </button>
+          {isHost && (
+            <button className="primary-button" type="button" onClick={onStartGame} disabled={startRequested}>
+              {startRequested ? '等待准备' : '房主开始'}
+            </button>
+          )}
         </div>
       </section>
 
@@ -76,12 +86,9 @@ export function RoomLobby({
                   {slot ? (
                     <>
                       <div className="slot-name">{slot.name}</div>
-                      <div className="slot-meta">{slot.isHost ? '房主' : '已加入'}</div>
-                      {!slot.isHost && (
-                        <button className="secondary-button tiny-button" type="button" onClick={() => onRemovePlayer(playerId)}>
-                          移除
-                        </button>
-                      )}
+                      <div className="slot-meta">
+                        {slot.isHost ? '房主' : slot.ready ? '已准备' : '未准备'}
+                      </div>
                     </>
                   ) : (
                     <>
@@ -95,31 +102,40 @@ export function RoomLobby({
           </div>
         </div>
 
-        <form
-          className="screen-card form-card"
-          onSubmit={(event) => {
-            event.preventDefault();
-            onAddPlayer();
-          }}
-        >
-          <h3>加入一个玩家</h3>
-          <label className="field-label" htmlFor="lobby-join-name">
-            玩家昵称
-          </label>
-          <input
-            id="lobby-join-name"
-            className="text-input"
-            value={joinName}
-            maxLength={12}
-            onChange={(event) => onJoinNameChange(event.target.value)}
-            placeholder={full ? '房间已满' : '例如：玩家 2'}
-            disabled={full}
-          />
-          <button className="primary-button" type="submit" disabled={full}>
-            加入空位
-          </button>
-          <p className="muted-note">不足 4 人时，剩余颜色会在开局时自动变成 AI。</p>
-        </form>
+        <section className="screen-card form-card">
+          <h3>{isHost ? '房主控制' : '我的状态'}</h3>
+          {isHost ? (
+            <>
+              <div className="ready-summary">
+                <strong>{readyCount}/{readyTotal}</strong>
+                <span>真人玩家已准备</span>
+              </div>
+              <button className="primary-button" type="button" onClick={onStartGame} disabled={startRequested}>
+                {startRequested ? '等待其他玩家准备' : '开始匹配'}
+              </button>
+              <p className="muted-note">点击开始后，已加入的真人玩家都准备就会自动开局，空位由 AI 替补。</p>
+            </>
+          ) : localSlot ? (
+            <>
+              <div className="ready-summary">
+                <strong>{localSlot.ready ? '已准备' : '未准备'}</strong>
+                <span>{startRequested ? '房主已请求开始' : '等待房主开始'}</span>
+              </div>
+              <button className={localSlot.ready ? 'secondary-button' : 'primary-button'} type="button" onClick={onToggleReady}>
+                {localSlot.ready ? '取消准备' : '准备'}
+              </button>
+              <p className="muted-note">准备后等待房主开始；开局后只能控制自己的颜色。</p>
+            </>
+          ) : (
+            <>
+              <div className="ready-summary">
+                <strong>旁观</strong>
+                <span>你不在这个房间中</span>
+              </div>
+              <p className="muted-note">请返回首页选择未满房间加入。</p>
+            </>
+          )}
+        </section>
       </section>
 
       {message && <div className="status-strip">{message}</div>}

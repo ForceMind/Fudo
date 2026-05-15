@@ -11,6 +11,8 @@ import { GameLog } from './GameLog';
 
 interface ControlPanelProps {
   state: GameState;
+  canAct: boolean;
+  canRestart: boolean;
   onRoll: () => void;
   onRestart: () => void;
 }
@@ -41,7 +43,7 @@ function PlayerRow({ player, state }: { player: Player; state: GameState }) {
   );
 }
 
-export function ControlPanel({ state, onRoll, onRestart }: ControlPanelProps) {
+export function ControlPanel({ state, canAct, canRestart, onRoll, onRestart }: ControlPanelProps) {
   const currentPlayer = getCurrentPlayer(state);
   const selectedPiece = state.selectedPieceId ? getPieceById(state, state.selectedPieceId) : null;
   const selectableCount = getSelectablePieceIds(state).length;
@@ -49,7 +51,7 @@ export function ControlPanel({ state, onRoll, onRestart }: ControlPanelProps) {
     selectedPiece && state.reachableCells.length > 0
       ? `${state.reachableCells.length} 个可走下一格`
       : '未选择目标';
-  const canRoll = currentPlayer.isHuman && state.stage === 'Roll' && !state.winnerId;
+  const canRoll = canAct && currentPlayer.isHuman && state.stage === 'Roll' && !state.winnerId;
 
   return (
     <aside className="control-panel">
@@ -84,7 +86,7 @@ export function ControlPanel({ state, onRoll, onRestart }: ControlPanelProps) {
           <button className="primary-button" type="button" onClick={onRoll} disabled={!canRoll}>
             掷骰
           </button>
-          <button className="secondary-button" type="button" onClick={onRestart}>
+          <button className="secondary-button" type="button" onClick={onRestart} disabled={!canRestart}>
             重开
           </button>
         </div>
@@ -92,7 +94,9 @@ export function ControlPanel({ state, onRoll, onRestart }: ControlPanelProps) {
         <div className="turn-hint">
           {state.winnerId
             ? '对局结束。'
-            : currentPlayer.isHuman
+            : !canAct && currentPlayer.isHuman
+              ? `等待 ${currentPlayer.name} 操作。`
+              : currentPlayer.isHuman
               ? state.stage === 'Roll'
                 ? '点击掷骰开始行动。'
                 : state.stage === 'Select'
