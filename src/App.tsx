@@ -140,7 +140,6 @@ function App() {
   const winner = state.winnerId ? state.players.find((player) => player.id === state.winnerId) : null;
   const localSlot = findLocalSlot(slots, browserUser?.id);
   const localPlayerId = localSlot?.id ?? null;
-  const isRoomHost = Boolean(localSlot?.isHost);
   const isSyncedGame = Boolean(matchId);
   const canControlCurrentTurn =
     !state.winnerId &&
@@ -148,7 +147,7 @@ function App() {
       ? currentPlayer.isHuman
       : currentPlayer.isHuman
         ? currentPlayer.id === localPlayerId
-        : isRoomHost);
+        : false);
 
   useEffect(() => {
     stateRef.current = state;
@@ -175,7 +174,15 @@ function App() {
 
   const loadMatchState = useCallback(
     async (nextMatchId: string, enterGame = false) => {
-      const match = await getSyncedMatchState(nextMatchId);
+      const match = await getSyncedMatchState(nextMatchId, browserUserRef.current);
+      if (match.status === 'finished' && !match.winner && !match.gameState?.winnerId) {
+        clearSavedSession();
+        setMatchId(null);
+        matchIdRef.current = null;
+        setMessage('房间已被后台解散，对局已结束。');
+        setView('home');
+        return;
+      }
       if (!match.gameState) {
         setMessage('对局状态还没有准备好。');
         return;
@@ -280,10 +287,16 @@ function App() {
       }
 
       try {
-        const room = await getServerRoom(savedSession.roomCode);
+        const room = await getServerRoom(savedSession.roomCode, user);
         const restoredSlot = findLocalSlot(room.slots, user.id);
         if (!restoredSlot) {
           clearSavedSession();
+          return;
+        }
+        if (room.status === 'finished') {
+          clearSavedSession();
+          setMessage('房间已结束或已被解散。');
+          setView('home');
           return;
         }
 
@@ -307,6 +320,7 @@ function App() {
 
   useEffect(() => {
     void ensureBrowserUser().then((user) => {
+      browserUserRef.current = user;
       setBrowserUser(user);
       setNicknameDraft(user.nickname);
       setHostName(user.nickname);
@@ -349,8 +363,16 @@ function App() {
     }
 
     const syncRoom = () => {
-      void getServerRoom(roomCode)
+      void getServerRoom(roomCode, browserUserRef.current)
         .then((room) => {
+          if (room.status === 'finished') {
+            clearSavedSession();
+            setSlots(createEmptySlots());
+            setStartRequested(false);
+            setView('home');
+            setMessage('房间已被后台解散。');
+            return;
+          }
           setSlots(room.slots);
           setStartRequested(Boolean(room.startRequested));
           if (room.status === 'active' && room.matchId) {
@@ -372,8 +394,16 @@ function App() {
     }
 
     const timer = window.setInterval(() => {
-      void getSyncedMatchState(matchId)
+      void getSyncedMatchState(matchId, browserUserRef.current)
         .then((match) => {
+          if (match.status === 'finished' && !match.winner && !match.gameState?.winnerId) {
+            clearSavedSession();
+            setMatchId(null);
+            matchIdRef.current = null;
+            setView('home');
+            setMessage('房间已被后台解散，对局已结束。');
+            return;
+          }
           if (
             match.gameState &&
             match.stateVersion > matchVersionRef.current &&
@@ -390,7 +420,13 @@ function App() {
   }, [hydrateGameState, matchId, view]);
 
   useEffect(() => {
-    if (view !== 'game' || state.stage !== 'Roll' || currentPlayer.isHuman || state.winnerId || !canControlCurrentTurn) {
+    if (
+      view !== 'game' ||
+      isSyncedGame ||
+      state.stage !== 'Roll' ||
+      currentPlayer.isHuman ||
+      state.winnerId
+    ) {
       return;
     }
 
@@ -398,8 +434,8 @@ function App() {
     return () => window.clearTimeout(timer);
   }, [
     applyGameAction,
-    canControlCurrentTurn,
     currentPlayer.isHuman,
+    isSyncedGame,
     state.currentPlayerIndex,
     state.stage,
     state.turnNumber,
@@ -408,13 +444,23 @@ function App() {
   ]);
 
   useEffect(() => {
-    if (view !== 'game' || state.stage !== 'Battle' || state.winnerId || !canControlCurrentTurn) {
+    const canFinishBattle = isSyncedGame ? canControlCurrentTurn : canControlCurrentTurn || !currentPlayer.isHuman;
+    if (view !== 'game' || state.stage !== 'Battle' || state.winnerId || !canFinishBattle) {
       return;
     }
 
     const timer = window.setTimeout(() => applyGameAction({ type: 'FINISH_BATTLE' }), 850);
     return () => window.clearTimeout(timer);
-  }, [applyGameAction, canControlCurrentTurn, state.lastMove?.id, state.stage, state.winnerId, view]);
+  }, [
+    applyGameAction,
+    canControlCurrentTurn,
+    currentPlayer.isHuman,
+    isSyncedGame,
+    state.lastMove?.id,
+    state.stage,
+    state.winnerId,
+    view,
+  ]);
 
   const openRules = () => {
     setReturnView(view === 'rules' ? 'home' : view);

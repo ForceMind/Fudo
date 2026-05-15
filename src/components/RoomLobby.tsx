@@ -8,6 +8,7 @@ export interface LobbySlot {
   isHost: boolean;
   userId?: string | null;
   ready?: boolean;
+  lastSeenAt?: string | null;
 }
 
 interface RoomLobbyProps {

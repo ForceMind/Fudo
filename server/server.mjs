@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, createReadStream, statSync } from 'node:fs';
 import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { advanceServerAiTurns } from './game-engine.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = resolve(__dirname, '..');
@@ -16,6 +17,7 @@ const adminHosts = String(process.env.ADMIN_HOSTS ?? process.env.ADMIN_HOST ?? '
   .split(',')
   .map((host) => host.trim().toLowerCase())
   .filter(Boolean);
+const offlineTimeoutMs = Number(process.env.OFFLINE_TIMEOUT_MS ?? 15000);
 
 const contentTypes = {
   '.html': 'text/html; charset=utf-8',
@@ -117,12 +119,55 @@ function roomSlotsToArray(slots = {}) {
   return ['red', 'blue', 'green', 'yellow'].map((playerId) => slots[playerId]).filter(Boolean);
 }
 
+function parseTimestamp(value) {
+  const time = Date.parse(value ?? '');
+  return Number.isFinite(time) ? time : 0;
+}
+
+function isSlotOnline(slot, referenceTime = Date.now()) {
+  return Boolean(slot?.isHuman && slot.userId && parseTimestamp(slot.lastSeenAt) >= referenceTime - offlineTimeoutMs);
+}
+
+function touchUser(db, userId) {
+  if (!userId) {
+    return null;
+  }
+
+  const user = db.users.find((candidate) => candidate.id === userId);
+  if (!user) {
+    return null;
+  }
+
+  const timestamp = now();
+  user.lastSeenAt = timestamp;
+  user.updatedAt = timestamp;
+  return user;
+}
+
+function touchRoomSlot(db, room, userId) {
+  const user = touchUser(db, userId);
+  const slot = room ? getRoomSlotByUserId(room, userId) : null;
+  if (!slot) {
+    return null;
+  }
+
+  const timestamp = user?.lastSeenAt ?? now();
+  slot.lastSeenAt = timestamp;
+  if (user?.nickname) {
+    slot.name = user.nickname;
+  }
+  room.updatedAt = timestamp;
+  return slot;
+}
+
 function publicRoomSummary(room) {
   const players = roomSlotsToArray(room.slots).map((slot) => ({
     id: slot.id,
     name: slot.name,
     isHost: Boolean(slot.isHost),
     ready: Boolean(slot.ready),
+    online: isSlotOnline(slot),
+    lastSeenAt: slot.lastSeenAt ?? null,
   }));
   const host = players.find((player) => player.isHost) ?? players[0] ?? null;
   return {
@@ -192,6 +237,97 @@ function getRoomSlotByUserId(room, userId) {
   return roomSlotsToArray(room.slots).find((slot) => slot.userId && slot.userId === userId) ?? null;
 }
 
+function syncMatchPresence(db, match) {
+  const room = findRoomByMatch(db, match);
+  if (!room || !Array.isArray(match.gameState?.players)) {
+    return false;
+  }
+
+  const referenceTime = Date.now();
+  let changed = false;
+  const players = match.gameState.players.map((player) => {
+    const slot = room.slots?.[player.id] ?? null;
+    const desiredHuman = slot?.isHuman ? isSlotOnline(slot, referenceTime) : false;
+    const desiredName = slot?.name ?? player.name;
+    if (player.isHuman === desiredHuman && player.name === desiredName) {
+      return player;
+    }
+
+    changed = true;
+    return {
+      ...player,
+      name: desiredName,
+      isHuman: desiredHuman,
+    };
+  });
+
+  if (!changed) {
+    return false;
+  }
+
+  match.gameState = sanitizeGameStateForStorage({
+    ...match.gameState,
+    players,
+  });
+  match.stateVersion = Number(match.stateVersion ?? 0) + 1;
+  match.updatedAt = now();
+  return true;
+}
+
+function publicSyncedMatch(match) {
+  return {
+    id: match.id,
+    roomCode: match.roomCode,
+    status: match.status,
+    stateVersion: match.stateVersion ?? 0,
+    gameState: match.gameState ?? null,
+    winner: match.winner ?? null,
+  };
+}
+
+function advanceMatchAi(db, match) {
+  if (match.status !== 'running' || !match.gameState) {
+    return false;
+  }
+
+  const presenceChanged = syncMatchPresence(db, match);
+  const result = advanceServerAiTurns(match.gameState);
+  if (!result.changed) {
+    return presenceChanged;
+  }
+
+  match.gameState = sanitizeGameStateForStorage(result.gameState);
+  match.stateVersion = Number(match.stateVersion ?? 0) + 1;
+  match.turnNumber = Number(result.gameState.turnNumber ?? match.turnNumber ?? 1);
+  match.updatedAt = now();
+  applyMatchResultStats(db, match, result.gameState);
+  return true;
+}
+
+function dissolveRoom(db, room) {
+  const timestamp = now();
+  room.status = 'finished';
+  room.updatedAt = timestamp;
+  room.endedAt = timestamp;
+  room.dissolvedAt = timestamp;
+  room.closedReason = 'admin_dissolved';
+  room.startRequested = false;
+  delete room.pendingPlayers;
+  delete room.pendingGameState;
+
+  const match = room.matchId ? db.matches.find((candidate) => candidate.id === room.matchId) : null;
+  if (match && match.status !== 'finished') {
+    match.status = 'finished';
+    match.endedAt = timestamp;
+    match.updatedAt = timestamp;
+    match.winner = null;
+    match.closedReason = 'admin_dissolved';
+    match.stateVersion = Number(match.stateVersion ?? 0) + 1;
+  }
+
+  return { room, match };
+}
+
 function canUpdateMatchState(db, match, userId) {
   const room = findRoomByMatch(db, match);
   const state = match.gameState;
@@ -201,11 +337,11 @@ function canUpdateMatchState(db, match, userId) {
   }
 
   if (currentPlayer.isHuman) {
-    return room.slots?.[currentPlayer.id]?.userId === userId;
+    const currentSlot = room.slots?.[currentPlayer.id] ?? null;
+    return currentSlot?.userId === userId && isSlotOnline(currentSlot);
   }
 
-  const host = getHostSlot(room);
-  return host?.userId === userId || room.hostUserId === userId;
+  return false;
 }
 
 function applyMatchResultStats(db, match, gameState) {
@@ -363,6 +499,7 @@ async function handleApi(req, res, url) {
           isHost: true,
           userId: body.hostUserId ?? null,
           ready: false,
+          lastSeenAt: now(),
         },
         blue: null,
         green: null,
@@ -386,6 +523,19 @@ async function handleApi(req, res, url) {
     }
 
     if (req.method === 'GET' && !action) {
+      const userId = url.searchParams.get('userId');
+      let changed = false;
+      if (userId) {
+        touchRoomSlot(db, room, userId);
+        changed = true;
+      }
+      if (room.matchId) {
+        const match = db.matches.find((candidate) => candidate.id === room.matchId);
+        changed = match ? advanceMatchAi(db, match) || changed : changed;
+      }
+      if (changed) {
+        writeDb(db);
+      }
       sendJson(res, 200, { room });
       return;
     }
@@ -399,6 +549,8 @@ async function handleApi(req, res, url) {
       const userId = body.userId ?? null;
       const existing = roomSlotsToArray(room.slots).find((slot) => slot.userId && slot.userId === userId);
       if (existing) {
+        touchRoomSlot(db, room, userId);
+        writeDb(db);
         sendJson(res, 200, { room });
         return;
       }
@@ -414,6 +566,7 @@ async function handleApi(req, res, url) {
         isHost: false,
         userId,
         ready: false,
+        lastSeenAt: now(),
       };
       room.updatedAt = now();
       writeDb(db);
@@ -439,6 +592,7 @@ async function handleApi(req, res, url) {
       }
 
       slot.ready = Boolean(body.ready);
+      touchRoomSlot(db, room, body.userId ?? null);
       room.updatedAt = now();
       const match = maybeStartRoom(db, room);
       writeDb(db);
@@ -458,6 +612,7 @@ async function handleApi(req, res, url) {
         sendJson(res, 403, { error: '只有房主可以开始' });
         return;
       }
+      touchRoomSlot(db, room, body.hostUserId ?? null);
       if (!body.gameState || !Array.isArray(body.players)) {
         sendJson(res, 400, { error: '缺少对局初始状态' });
         return;
@@ -516,16 +671,16 @@ async function handleApi(req, res, url) {
     }
 
     if (req.method === 'GET') {
-      sendJson(res, 200, {
-        match: {
-          id: match.id,
-          roomCode: match.roomCode,
-          status: match.status,
-          stateVersion: match.stateVersion ?? 0,
-          gameState: match.gameState ?? null,
-          winner: match.winner ?? null,
-        },
-      });
+      const room = findRoomByMatch(db, match);
+      const userId = url.searchParams.get('userId');
+      if (userId) {
+        touchRoomSlot(db, room, userId);
+      }
+      const changed = advanceMatchAi(db, match);
+      if (userId || changed) {
+        writeDb(db);
+      }
+      sendJson(res, 200, { match: publicSyncedMatch(match) });
       return;
     }
 
@@ -539,6 +694,8 @@ async function handleApi(req, res, url) {
         sendJson(res, 400, { error: '缺少 gameState' });
         return;
       }
+      const room = findRoomByMatch(db, match);
+      touchRoomSlot(db, room, body.userId ?? null);
       if (Number(body.stateVersion) !== Number(match.stateVersion ?? 0)) {
         sendJson(res, 409, {
           error: '对局状态已更新，请同步后重试',
@@ -557,17 +714,9 @@ async function handleApi(req, res, url) {
       match.turnNumber = Number(body.gameState.turnNumber ?? match.turnNumber ?? 1);
       match.updatedAt = now();
       applyMatchResultStats(db, match, body.gameState);
+      advanceMatchAi(db, match);
       writeDb(db);
-      sendJson(res, 200, {
-        match: {
-          id: match.id,
-          roomCode: match.roomCode,
-          status: match.status,
-          stateVersion: match.stateVersion,
-          gameState: match.gameState,
-          winner: match.winner ?? null,
-        },
-      });
+      sendJson(res, 200, { match: publicSyncedMatch(match) });
       return;
     }
   }
@@ -604,6 +753,25 @@ async function handleApi(req, res, url) {
 
     writeDb(db);
     sendJson(res, 200, { match });
+    return;
+  }
+
+  const adminRoomDissolve = path.match(/^\/api\/admin\/rooms\/([A-Z0-9]{6})\/dissolve$/);
+  if (req.method === 'POST' && adminRoomDissolve) {
+    if (!isAdminRequest(req, url)) {
+      sendJson(res, 401, { error: '需要后台访问令牌' });
+      return;
+    }
+
+    const room = db.rooms.find((candidate) => candidate.code === adminRoomDissolve[1]);
+    if (!room) {
+      sendJson(res, 404, { error: '房间不存在' });
+      return;
+    }
+
+    const result = dissolveRoom(db, room);
+    writeDb(db);
+    sendJson(res, 200, result);
     return;
   }
 
@@ -644,6 +812,20 @@ function serveStatic(req, res, url) {
   createReadStream(finalPath).pipe(res);
 }
 
+function runAiAutomationTick() {
+  const db = readDb();
+  let changed = false;
+  db.matches
+    .filter((match) => match.status === 'running')
+    .forEach((match) => {
+      changed = advanceMatchAi(db, match) || changed;
+    });
+
+  if (changed) {
+    writeDb(db);
+  }
+}
+
 const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
@@ -656,6 +838,15 @@ const server = createServer(async (req, res) => {
     sendJson(res, 500, { error: error instanceof Error ? error.message : '服务器错误' });
   }
 });
+
+const aiAutomationTimer = setInterval(() => {
+  try {
+    runAiAutomationTick();
+  } catch (error) {
+    console.error('AI takeover tick failed:', error);
+  }
+}, 1000);
+aiAutomationTimer.unref?.();
 
 server.listen(port, '0.0.0.0', () => {
   console.log(`Fudo production server listening on http://0.0.0.0:${port}`);

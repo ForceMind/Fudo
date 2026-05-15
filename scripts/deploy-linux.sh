@@ -20,6 +20,8 @@ NODE_MAJOR_REQUIRED="${NODE_MAJOR_REQUIRED:-20}"
 NODE_DOWNLOAD_MAJOR="${NODE_DOWNLOAD_MAJOR:-22}"
 NODE_MIRROR="${NODE_MIRROR:-https://nodejs.org/dist}"
 PRIVATE_NODE_ROOT="${PRIVATE_NODE_ROOT:-${APP_DIR}/.node}"
+ADMIN_TOKEN="${ADMIN_TOKEN:-}"
+ADMIN_HOSTS="${ADMIN_HOSTS:-${ADMIN_HOST:-}}"
 
 log() {
   printf '\033[1;36m%s\033[0m\n' "$1"
@@ -268,6 +270,21 @@ find_available_port() {
   fail "从端口 ${start_port} 开始连续 ${PORT_SCAN_LIMIT} 个端口都被占用。"
 }
 
+generate_admin_token() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 24
+    return
+  fi
+  od -An -N24 -tx1 /dev/urandom | tr -d ' \n'
+  printf '\n'
+}
+
+read_existing_admin_token() {
+  local service_file="/etc/systemd/system/${SERVICE_NAME}.service"
+  [ -r "${service_file}" ] || return 0
+  awk 'index($0, "Environment=ADMIN_TOKEN=") == 1 { sub(/^Environment=ADMIN_TOKEN=/, ""); print; exit }' "${service_file}"
+}
+
 cd "${APP_DIR}"
 log "当前目录：$(pwd)"
 INSTALL_SERVICE="$(resolve_install_service)"
@@ -340,6 +357,13 @@ else
   log "使用端口：${PORT}"
 fi
 
+if [ -z "${ADMIN_TOKEN}" ]; then
+  ADMIN_TOKEN="$(read_existing_admin_token)"
+fi
+if [ -z "${ADMIN_TOKEN}" ]; then
+  ADMIN_TOKEN="$(generate_admin_token)"
+fi
+
 if [ "${INSTALL_SERVICE}" = "1" ]; then
   log "写入 systemd 服务：${SERVICE_FILE}"
   write_root_file "${SERVICE_FILE}" <<SERVICE
@@ -352,8 +376,8 @@ Type=simple
 WorkingDirectory=$(pwd)
 Environment=NODE_ENV=${NODE_ENV}
 Environment=PORT=${PORT}
-Environment=ADMIN_TOKEN=${ADMIN_TOKEN:-}
-Environment=ADMIN_HOSTS=${ADMIN_HOSTS:-${ADMIN_HOST:-}}
+Environment=ADMIN_TOKEN=${ADMIN_TOKEN}
+Environment=ADMIN_HOSTS=${ADMIN_HOSTS}
 Environment=LANG=${LANG}
 Environment=LC_ALL=${LC_ALL}
 Environment=PATH=${RESOLVED_NODE_DIR}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -371,5 +395,11 @@ SERVICE
   log "部署完成：systemd 服务 ${SERVICE_NAME} 已启动，端口 ${PORT}。"
 else
   log "部署完成。使用以下命令启动生产服务："
-  printf 'NODE_ENV=production PORT=%s "%s" server/server.mjs\n' "${PORT}" "${RESOLVED_NODE_BIN}"
+  printf 'ADMIN_TOKEN=%q ADMIN_HOSTS=%q NODE_ENV=production PORT=%s "%s" server/server.mjs\n' "${ADMIN_TOKEN}" "${ADMIN_HOSTS}" "${PORT}" "${RESOLVED_NODE_BIN}"
+fi
+
+log "后台密钥 ADMIN_TOKEN：${ADMIN_TOKEN}"
+log "后台入口路径：/admin?token=${ADMIN_TOKEN}"
+if [ -n "${ADMIN_HOSTS}" ]; then
+  log "后台允许域名：${ADMIN_HOSTS}"
 fi

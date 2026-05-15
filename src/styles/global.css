@@ -739,7 +739,8 @@ th {
 }
 
 .primary-button,
-.secondary-button {
+.secondary-button,
+.danger-button {
   min-height: 34px;
   border: 0;
   border-radius: 8px;
@@ -763,15 +764,28 @@ th {
   color: #334155;
 }
 
+.danger-button {
+  background: #dc2626;
+  color: #ffffff;
+}
+
+.table-action {
+  min-height: 26px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
 .primary-button:disabled,
-.secondary-button:disabled {
+.secondary-button:disabled,
+.danger-button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
   box-shadow: none;
 }
 
 .primary-button:not(:disabled):hover,
-.secondary-button:not(:disabled):hover {
+.secondary-button:not(:disabled):hover,
+.danger-button:not(:disabled):hover {
   transform: translateY(-1px);
 }
 

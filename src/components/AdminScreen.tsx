@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { AdminSummary, getAdminSummary } from '../api';
+import { AdminSummary, dissolveAdminRoom, getAdminSummary } from '../api';
 
 interface AdminScreenProps {
   onBack: () => void;
@@ -16,6 +16,7 @@ export function AdminScreen({ onBack }: AdminScreenProps) {
   const [summary, setSummary] = useState<AdminSummary | null>(null);
   const [token, setToken] = useState(() => new URLSearchParams(window.location.search).get('token') ?? '');
   const [message, setMessage] = useState('加载中...');
+  const [busyRoomCode, setBusyRoomCode] = useState<string | null>(null);
 
   const loadSummary = async (nextToken = token) => {
     setMessage('加载中...');
@@ -32,6 +33,24 @@ export function AdminScreen({ onBack }: AdminScreenProps) {
     void loadSummary(token);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const dissolveRoom = async (roomCode: string) => {
+    if (!window.confirm(`确定解散房间 ${roomCode}？进行中的对局也会结束。`)) {
+      return;
+    }
+
+    setBusyRoomCode(roomCode);
+    setMessage('正在解散房间...');
+    try {
+      await dissolveAdminRoom(roomCode, token.trim() || undefined);
+      setMessage(`房间 ${roomCode} 已解散。`);
+      await loadSummary(token);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '解散房间失败。');
+    } finally {
+      setBusyRoomCode(null);
+    }
+  };
 
   return (
     <main className="admin-screen">
@@ -140,15 +159,38 @@ export function AdminScreen({ onBack }: AdminScreenProps) {
                   <th>状态</th>
                   <th>玩家</th>
                   <th>更新时间</th>
+                  <th>操作</th>
                 </tr>
               </thead>
               <tbody>
                 {(summary?.rooms ?? []).map((room) => (
                   <tr key={room.code}>
                     <td>{room.code}</td>
-                    <td>{room.status === 'active' ? '已开始' : '等待'}</td>
+                    <td>
+                      {room.closedReason === 'admin_dissolved'
+                        ? '已解散'
+                        : room.status === 'finished'
+                          ? '已结束'
+                          : room.status === 'active'
+                            ? '已开始'
+                            : '等待'}
+                    </td>
                     <td>{Object.values(room.slots).filter(Boolean).length}/4</td>
                     <td>{formatTime(room.updatedAt)}</td>
+                    <td>
+                      {room.status !== 'finished' ? (
+                        <button
+                          className="danger-button table-action"
+                          type="button"
+                          disabled={busyRoomCode === room.code}
+                          onClick={() => void dissolveRoom(room.code)}
+                        >
+                          {busyRoomCode === room.code ? '处理中' : '解散'}
+                        </button>
+                      ) : (
+                        '-'
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>

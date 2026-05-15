@@ -16,6 +16,9 @@ export interface StoredRoom {
   status: 'waiting' | 'active' | 'finished';
   createdAt: string;
   updatedAt: string;
+  endedAt?: string | null;
+  dissolvedAt?: string | null;
+  closedReason?: string;
   startedAt: string | null;
   matchId: string | null;
   hostUserId: string | null;
@@ -36,6 +39,8 @@ export interface RoomSummary {
     name: string;
     isHost: boolean;
     ready: boolean;
+    online?: boolean;
+    lastSeenAt?: string | null;
   }>;
   startRequested: boolean;
 }
@@ -192,8 +197,9 @@ export async function setServerRoomReady(roomCode: string, user: BrowserUser, re
   return room;
 }
 
-export async function getServerRoom(roomCode: string): Promise<StoredRoom> {
-  const { room } = await requestJson<{ room: StoredRoom }>(`/api/rooms/${roomCode}`);
+export async function getServerRoom(roomCode: string, user?: BrowserUser | null): Promise<StoredRoom> {
+  const query = user?.id ? `?userId=${encodeURIComponent(user.id)}` : '';
+  const { room } = await requestJson<{ room: StoredRoom }>(`/api/rooms/${roomCode}${query}`);
   return room;
 }
 
@@ -209,8 +215,9 @@ export async function requestServerRoomStart(
   });
 }
 
-export async function getSyncedMatchState(matchId: string): Promise<SyncedMatchState> {
-  const { match } = await requestJson<{ match: SyncedMatchState }>(`/api/matches/${matchId}/state`);
+export async function getSyncedMatchState(matchId: string, user?: BrowserUser | null): Promise<SyncedMatchState> {
+  const query = user?.id ? `?userId=${encodeURIComponent(user.id)}` : '';
+  const { match } = await requestJson<{ match: SyncedMatchState }>(`/api/matches/${matchId}/state${query}`);
   return match;
 }
 
@@ -260,4 +267,12 @@ export async function finishServerMatch(
 export async function getAdminSummary(token?: string): Promise<AdminSummary> {
   const query = token ? `?token=${encodeURIComponent(token)}` : '';
   return requestJson<AdminSummary>(`/api/admin/summary${query}`);
+}
+
+export async function dissolveAdminRoom(roomCode: string, token?: string): Promise<void> {
+  const query = token ? `?token=${encodeURIComponent(token)}` : '';
+  await requestJson(`/api/admin/rooms/${roomCode}/dissolve${query}`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
 }
