@@ -10,7 +10,7 @@ PORT="${PORT:-8787}"
 PORT_SCAN_LIMIT="${PORT_SCAN_LIMIT:-50}"
 SERVICE_NAME="${SERVICE_NAME:-fudo}"
 AUTO_GIT_PULL="${AUTO_GIT_PULL:-1}"
-INSTALL_SERVICE="${INSTALL_SERVICE:-0}"
+INSTALL_SERVICE="${INSTALL_SERVICE:-auto}"
 NODE_ENV="production"
 NODE_BIN="${NODE_BIN:-}"
 NPM_BIN="${NPM_BIN:-}"
@@ -28,6 +28,43 @@ log() {
 fail() {
   printf '\033[1;31m错误：%s\033[0m\n' "$1" >&2
   exit 1
+}
+
+is_root() {
+  [ "$(id -u)" -eq 0 ]
+}
+
+run_as_root() {
+  if is_root; then
+    "$@"
+    return
+  fi
+  command -v sudo >/dev/null 2>&1 || fail "需要 root 权限，请使用 sudo bash deploy.sh。"
+  sudo "$@"
+}
+
+write_root_file() {
+  local target="$1"
+  if is_root; then
+    tee "${target}" >/dev/null
+    return
+  fi
+  command -v sudo >/dev/null 2>&1 || fail "需要 root 权限写入 ${target}，请使用 sudo bash deploy.sh。"
+  sudo tee "${target}" >/dev/null
+}
+
+resolve_install_service() {
+  case "${INSTALL_SERVICE}" in
+    0|1) printf '%s\n' "${INSTALL_SERVICE}" ;;
+    auto)
+      if is_root && command -v systemctl >/dev/null 2>&1; then
+        printf '1\n'
+      else
+        printf '0\n'
+      fi
+      ;;
+    *) fail "INSTALL_SERVICE 只能是 auto、1 或 0：${INSTALL_SERVICE}" ;;
+  esac
 }
 
 to_absolute_path() {
@@ -233,6 +270,12 @@ find_available_port() {
 
 cd "${APP_DIR}"
 log "当前目录：$(pwd)"
+INSTALL_SERVICE="$(resolve_install_service)"
+if [ "${INSTALL_SERVICE}" = "1" ]; then
+  log "部署模式：自动安装并启动 systemd 服务。"
+else
+  log "部署模式：仅构建，不安装 systemd 服务。"
+fi
 
 RESOLVED_NODE_BIN="$(resolve_node_bin)"
 RESOLVED_NODE_DIR="$(dirname "${RESOLVED_NODE_BIN}")"
@@ -283,7 +326,7 @@ if [ "${INSTALL_SERVICE}" = "1" ]; then
   SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
   if systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
     log "暂停现有 systemd 服务 ${SERVICE_NAME}，用于检测真实可用端口..."
-    sudo systemctl stop "${SERVICE_NAME}"
+    run_as_root systemctl stop "${SERVICE_NAME}"
   fi
 fi
 
@@ -299,7 +342,7 @@ fi
 
 if [ "${INSTALL_SERVICE}" = "1" ]; then
   log "写入 systemd 服务：${SERVICE_FILE}"
-  sudo tee "${SERVICE_FILE}" >/dev/null <<SERVICE
+  write_root_file "${SERVICE_FILE}" <<SERVICE
 [Unit]
 Description=Fudo Web Game
 After=network.target
@@ -320,9 +363,9 @@ RestartSec=3
 WantedBy=multi-user.target
 SERVICE
 
-  sudo systemctl daemon-reload
-  sudo systemctl enable "${SERVICE_NAME}"
-  sudo systemctl restart "${SERVICE_NAME}"
+  run_as_root systemctl daemon-reload
+  run_as_root systemctl enable "${SERVICE_NAME}"
+  run_as_root systemctl restart "${SERVICE_NAME}"
   log "部署完成：systemd 服务 ${SERVICE_NAME} 已启动，端口 ${PORT}。"
 else
   log "部署完成。使用以下命令启动生产服务："
