@@ -1,5 +1,5 @@
 {
-  "name": "dice-arena-2d-ludo-battle",
+  "name": "fudo",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -10,7 +10,8 @@
     "build": "tsc -p tsconfig.json && vite build",
     "preview": "vite preview",
     "start": "node server/server.mjs",
-    "prod": "npm run build && npm start"
+    "prod": "npm run build && npm start",
+    "deploy": "bash ./deploy.sh"
   },
   "dependencies": {
     "react": "^19.1.0",

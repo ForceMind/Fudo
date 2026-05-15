@@ -291,8 +291,8 @@ function App() {
     <div className="app-shell">
       <header className="app-header">
         <div>
-          <p className="eyebrow">本地房间 / AI 替补 / Canvas 棋盘</p>
-          <h1>Dice Arena: 2D Ludo Battle</h1>
+          <p className="eyebrow">2D Ludo Battle / 本地房间 / Canvas 棋盘</p>
+          <h1>Fudo</h1>
         </div>
         <div className="header-actions">
           <input

@@ -18,7 +18,7 @@ export function RulesScreen({ onBack }: RulesScreenProps) {
         <div className="section-header">
           <div>
             <p className="eyebrow">玩法说明</p>
-            <h2>Dice Arena 规则</h2>
+            <h2>Fudo 规则</h2>
           </div>
           <button className="secondary-button" type="button" onClick={onBack}>
             返回

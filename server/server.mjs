@@ -7,7 +7,9 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = resolve(__dirname, '..');
 const distDir = resolve(rootDir, 'dist');
-const dataFile = resolve(process.env.DICE_ARENA_DATA_FILE ?? join(rootDir, 'data', 'dice-arena-db.json'));
+const legacyDataFile = join(rootDir, 'data', 'dice-arena-db.json');
+const defaultDataFile = existsSync(legacyDataFile) ? legacyDataFile : join(rootDir, 'data', 'fudo-db.json');
+const dataFile = resolve(process.env.FUDO_DATA_FILE ?? process.env.DICE_ARENA_DATA_FILE ?? defaultDataFile);
 const port = Number(process.env.PORT ?? 8787);
 const adminToken = process.env.ADMIN_TOKEN ?? '';
 
@@ -376,6 +378,6 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(port, '0.0.0.0', () => {
-  console.log(`Dice Arena production server listening on http://0.0.0.0:${port}`);
+  console.log(`Fudo production server listening on http://0.0.0.0:${port}`);
   console.log(`Data file: ${dataFile}`);
 });

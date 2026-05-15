@@ -45,13 +45,20 @@ export interface AdminSummary {
   };
 }
 
-const clientIdKey = 'dice-arena-client-id';
-const userKey = 'dice-arena-user';
+const clientIdKey = 'fudo-client-id';
+const legacyClientIdKey = 'dice-arena-client-id';
+const userKey = 'fudo-user';
+const legacyUserKey = 'dice-arena-user';
 
 function getClientId(): string {
   const existing = window.localStorage.getItem(clientIdKey);
   if (existing) {
     return existing;
+  }
+  const legacy = window.localStorage.getItem(legacyClientIdKey);
+  if (legacy) {
+    window.localStorage.setItem(clientIdKey, legacy);
+    return legacy;
   }
   const next = crypto.randomUUID();
   window.localStorage.setItem(clientIdKey, next);
@@ -75,12 +82,14 @@ async function requestJson<T>(path: string, options: RequestInit = {}): Promise<
 }
 
 export function getStoredUser(): BrowserUser | null {
-  const raw = window.localStorage.getItem(userKey);
+  const raw = window.localStorage.getItem(userKey) ?? window.localStorage.getItem(legacyUserKey);
   if (!raw) {
     return null;
   }
   try {
-    return JSON.parse(raw) as BrowserUser;
+    const user = JSON.parse(raw) as BrowserUser;
+    window.localStorage.setItem(userKey, JSON.stringify(user));
+    return user;
   } catch {
     return null;
   }

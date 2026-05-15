@@ -27,9 +27,9 @@ export function StartScreen({
     <main className="menu-screen">
       <section className="screen-card hero-card">
         <div>
-          <p className="eyebrow">本地房间 MVP</p>
+          <p className="eyebrow">Fudo MVP</p>
           <h2>创建房间，等玩家加入，然后开局</h2>
-          <p className="screen-copy">当前版本先做同屏本地房间流程；未加入的颜色会由 AI 自动补位。</p>
+          <p className="screen-copy">Fudo 是二维飞行棋轻策略对战；未加入的颜色会由 AI 自动补位。</p>
         </div>
         <button className="secondary-button" type="button" onClick={onOpenRules}>
           规则说明

@@ -7,7 +7,7 @@ export LC_ALL="${LC_ALL:-C.UTF-8}"
 APP_DIR="${APP_DIR:-$(pwd)}"
 BRANCH="${BRANCH:-}"
 PORT="${PORT:-8787}"
-SERVICE_NAME="${SERVICE_NAME:-dice-arena}"
+SERVICE_NAME="${SERVICE_NAME:-fudo}"
 AUTO_GIT_PULL="${AUTO_GIT_PULL:-1}"
 INSTALL_SERVICE="${INSTALL_SERVICE:-0}"
 NODE_ENV="production"
@@ -63,7 +63,7 @@ if [ "${INSTALL_SERVICE}" = "1" ]; then
   log "写入 systemd 服务：${SERVICE_FILE}"
   sudo tee "${SERVICE_FILE}" >/dev/null <<SERVICE
 [Unit]
-Description=Dice Arena Web Game
+Description=Fudo Web Game
 After=network.target
 
 [Service]
