@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { TILE_LABELS, TILE_SHORT_LABELS } from '../game/constants';
 import { getCellDisplayLabel, getCurrentPlayer, getPieceById, isPieceSelectable } from '../game/rules';
-import { coordKey, getCell, sameCoord } from '../game/board';
+import { coordKey, getCell, getHomeBand, sameCoord } from '../game/board';
 import type { Cell, Coord, GameState, Piece, Player, ReachableCell } from '../game/types';
 
 interface GameCanvasProps {
@@ -97,16 +97,10 @@ function colorWithAlpha(hex: string, alpha: number): string {
 
 function getHomeBandOwner(state: GameState, coord: Coord): Player | undefined {
   return state.players.find((player) => {
-    const goals = state.board.goalCells[player.id];
-    const minX = Math.min(...goals.map((goal) => goal.x));
-    const maxX = Math.max(...goals.map((goal) => goal.x));
-    const minY = Math.min(...goals.map((goal) => goal.y));
-    const maxY = Math.max(...goals.map((goal) => goal.y));
-    const touchesTopOrBottom = minY === 0 || maxY === state.board.size - 1;
-
-    return touchesTopOrBottom
-      ? coord.y >= minY && coord.y <= maxY
-      : coord.x >= minX && coord.x <= maxX;
+    const band = getHomeBand(state.board, player.id);
+    return band.orientation === 'rows'
+      ? coord.y >= band.min && coord.y <= band.max
+      : coord.x >= band.min && coord.x <= band.max;
   });
 }
 

@@ -25,6 +25,31 @@ export function isGoalForPlayer(board: Board, coord: Coord, playerId: PlayerId):
   return board.goalCells[playerId].some((goal) => sameCoord(goal, coord));
 }
 
+export function getHomeBand(
+  board: Board,
+  playerId: PlayerId,
+): { orientation: 'rows' | 'columns'; min: number; max: number } {
+  const spawnCells = board.spawnCells[playerId];
+  const averageX = spawnCells.reduce((sum, coord) => sum + coord.x, 0) / spawnCells.length;
+  const averageY = spawnCells.reduce((sum, coord) => sum + coord.y, 0) / spawnCells.length;
+  const startsLeft = averageX < board.size / 2;
+  const startsTop = averageY < board.size / 2;
+
+  if (startsLeft && startsTop) {
+    return { orientation: 'rows', min: board.size - 2, max: board.size - 1 };
+  }
+
+  if (!startsLeft && startsTop) {
+    return { orientation: 'columns', min: 0, max: 1 };
+  }
+
+  if (!startsLeft && !startsTop) {
+    return { orientation: 'rows', min: 0, max: 1 };
+  }
+
+  return { orientation: 'columns', min: board.size - 2, max: board.size - 1 };
+}
+
 export function findPortalPair(board: Board, coord: Coord): Coord | null {
   const cell = getCell(board, coord);
   if (cell.type !== 'portal' || !cell.portalId) {
@@ -64,30 +89,10 @@ export function createBoard(): Board {
   };
 
   const goalCells: Record<PlayerId, Coord[]> = {
-    red: [
-      { x: 5, y: 12 },
-      { x: 6, y: 12 },
-      { x: 7, y: 12 },
-      { x: 6, y: 11 },
-    ],
-    blue: [
-      { x: 0, y: 5 },
-      { x: 0, y: 6 },
-      { x: 0, y: 7 },
-      { x: 1, y: 6 },
-    ],
-    green: [
-      { x: 5, y: 0 },
-      { x: 6, y: 0 },
-      { x: 7, y: 0 },
-      { x: 6, y: 1 },
-    ],
-    yellow: [
-      { x: 12, y: 5 },
-      { x: 12, y: 6 },
-      { x: 12, y: 7 },
-      { x: 11, y: 6 },
-    ],
+    red: [{ x: 6, y: 12 }],
+    blue: [{ x: 0, y: 6 }],
+    green: [{ x: 6, y: 0 }],
+    yellow: [{ x: 12, y: 6 }],
   };
 
   const cells: Cell[] = [];

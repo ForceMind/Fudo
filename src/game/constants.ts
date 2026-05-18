@@ -49,7 +49,7 @@ export const TILE_LABELS = {
   empty: '空地',
   center: '争夺区',
   spawn: '出生区',
-  goal: '目标区',
+  goal: '家',
   obstacle: '障碍',
   safe: '安全格',
   boost: '加速格',

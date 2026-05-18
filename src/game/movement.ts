@@ -1,10 +1,10 @@
 import { DIRECTIONS } from './constants';
-import { coordKey, findPortalPair, getCell, inBounds, sameCoord } from './board';
+import { coordKey, findPortalPair, getCell, getHomeBand, inBounds, sameCoord } from './board';
 import type { Board, Coord, Piece, ReachableCell, StepOption } from './types';
 
 function piecesAt(pieces: Piece[], coord: Coord, exceptPieceId?: string): Piece[] {
   return pieces.filter((piece) => {
-    if (piece.id === exceptPieceId) {
+    if (piece.home || piece.id === exceptPieceId) {
       return false;
     }
     return sameCoord(piece.position, coord);
@@ -41,21 +41,8 @@ function isForbiddenOwnedTile(board: Board, coord: Coord, piece: Piece): boolean
   return (cell.type === 'spawn' || cell.type === 'goal') && Boolean(cell.ownerId) && cell.ownerId !== piece.playerId;
 }
 
-function getHomeBand(board: Board, piece: Piece): { orientation: 'rows' | 'columns'; min: number; max: number } {
-  const goals = board.goalCells[piece.playerId];
-  const minX = Math.min(...goals.map((goal) => goal.x));
-  const maxX = Math.max(...goals.map((goal) => goal.x));
-  const minY = Math.min(...goals.map((goal) => goal.y));
-  const maxY = Math.max(...goals.map((goal) => goal.y));
-  const touchesTopOrBottom = minY === 0 || maxY === board.size - 1;
-
-  return touchesTopOrBottom
-    ? { orientation: 'rows', min: minY, max: maxY }
-    : { orientation: 'columns', min: minX, max: maxX };
-}
-
 function isInHomeBand(board: Board, coord: Coord, piece: Piece): boolean {
-  const band = getHomeBand(board, piece);
+  const band = getHomeBand(board, piece.playerId);
   return band.orientation === 'rows'
     ? coord.y >= band.min && coord.y <= band.max
     : coord.x >= band.min && coord.x <= band.max;

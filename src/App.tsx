@@ -174,6 +174,7 @@ function App() {
   const [matchId, setMatchId] = useState<string | null>(null);
   const [matchVersion, setMatchVersion] = useState(0);
   const [state, setState] = useState<GameState>(() => createInitialState());
+  const [dismissedVictoryKey, setDismissedVictoryKey] = useState<string | null>(null);
 
   const stateRef = useRef(state);
   const slotsRef = useRef(slots);
@@ -185,6 +186,8 @@ function App() {
 
   const currentPlayer = getCurrentPlayer(state);
   const winner = state.winnerId ? state.players.find((player) => player.id === state.winnerId) : null;
+  const victoryKey = winner ? `${matchId ?? 'local'}:${state.startedAt}:${winner.id}` : null;
+  const showVictoryDialog = Boolean(winner && victoryKey && dismissedVictoryKey !== victoryKey);
   const visibleNotice =
     state.notice && state.globalNotice
       ? state.notice.id >= state.globalNotice.id
@@ -697,6 +700,12 @@ function App() {
     hydrateGameState(createInitialState(gamePlayers), 0);
   };
 
+  const closeVictoryDialog = () => {
+    if (victoryKey) {
+      setDismissedVictoryKey(victoryKey);
+    }
+  };
+
   const exitGame = () => {
     if (!window.confirm('退出当前游戏？退出后刷新不会自动回到这局游戏。')) {
       return;
@@ -816,14 +825,14 @@ function App() {
         </div>
       )}
 
-      {view === 'game' && winner && (
+      {view === 'game' && winner && showVictoryDialog && (
         <div className="victory-overlay" role="dialog" aria-modal="true">
           <div className="victory-dialog">
             <span className="player-dot huge" style={{ background: winner.color }} />
             <h2>{winner.name}获胜</h2>
             <p>4 枚棋子全部回家。</p>
-            <button className="primary-button" type="button" onClick={restartGame} disabled={isSyncedGame}>
-              {isSyncedGame ? '对局已同步结束' : '再来一局'}
+            <button className="primary-button" type="button" onClick={isSyncedGame ? closeVictoryDialog : restartGame}>
+              {isSyncedGame ? '关闭' : '再来一局'}
             </button>
           </div>
         </div>

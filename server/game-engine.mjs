@@ -43,7 +43,7 @@ function isGoalForPlayer(board, coord, playerId) {
 }
 
 function piecesAt(pieces, coord, exceptPieceId) {
-  return pieces.filter((piece) => piece.id !== exceptPieceId && sameCoord(piece.position, coord));
+  return pieces.filter((piece) => !piece.home && piece.id !== exceptPieceId && sameCoord(piece.position, coord));
 }
 
 function getSpawnOrigin(board, piece) {
@@ -77,16 +77,25 @@ function isForbiddenOwnedTile(board, coord, piece) {
 }
 
 function getHomeBand(board, piece) {
-  const goals = board.goalCells[piece.playerId];
-  const minX = Math.min(...goals.map((goal) => goal.x));
-  const maxX = Math.max(...goals.map((goal) => goal.x));
-  const minY = Math.min(...goals.map((goal) => goal.y));
-  const maxY = Math.max(...goals.map((goal) => goal.y));
-  const touchesTopOrBottom = minY === 0 || maxY === board.size - 1;
+  const spawnCells = board.spawnCells[piece.playerId];
+  const averageX = spawnCells.reduce((sum, coord) => sum + coord.x, 0) / spawnCells.length;
+  const averageY = spawnCells.reduce((sum, coord) => sum + coord.y, 0) / spawnCells.length;
+  const startsLeft = averageX < board.size / 2;
+  const startsTop = averageY < board.size / 2;
 
-  return touchesTopOrBottom
-    ? { orientation: 'rows', min: minY, max: maxY }
-    : { orientation: 'columns', min: minX, max: maxX };
+  if (startsLeft && startsTop) {
+    return { orientation: 'rows', min: board.size - 2, max: board.size - 1 };
+  }
+
+  if (!startsLeft && startsTop) {
+    return { orientation: 'columns', min: 0, max: 1 };
+  }
+
+  if (!startsLeft && !startsTop) {
+    return { orientation: 'rows', min: 0, max: 1 };
+  }
+
+  return { orientation: 'columns', min: board.size - 2, max: board.size - 1 };
 }
 
 function isInHomeBand(board, coord, piece) {
