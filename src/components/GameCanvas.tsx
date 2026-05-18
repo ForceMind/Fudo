@@ -117,12 +117,12 @@ function drawTile(ctx: CanvasRenderingContext2D, cell: Cell, metrics: BoardMetri
     (owner && (cell.type === 'spawn' || cell.type === 'goal')
       ? owner.accent
       : homeBandOwner && cell.type === 'empty'
-        ? colorWithAlpha(homeBandOwner.color, 0.14)
+        ? colorWithAlpha(homeBandOwner.color, 0.075)
         : TILE_COLORS[cell.type]);
   ctx.fillRect(x, y, metrics.cellSize, metrics.cellSize);
 
   if (homeBandOwner && cell.type === 'empty') {
-    ctx.fillStyle = colorWithAlpha(homeBandOwner.color, 0.08);
+    ctx.fillStyle = colorWithAlpha(homeBandOwner.color, 0.035);
     ctx.fillRect(x + 3, y + 3, metrics.cellSize - 6, metrics.cellSize - 6);
   }
 
@@ -151,7 +151,7 @@ function drawTile(ctx: CanvasRenderingContext2D, cell: Cell, metrics: BoardMetri
     (owner && cell.type === 'goal'
       ? owner.color
       : homeBandOwner && cell.type === 'empty'
-        ? colorWithAlpha(homeBandOwner.color, 0.38)
+        ? colorWithAlpha(homeBandOwner.color, 0.2)
         : 'rgba(100, 116, 139, 0.20)');
   ctx.lineWidth = cell.type === 'goal' || portalColor || (homeBandOwner && cell.type === 'empty') ? 2 : 1;
   ctx.strokeRect(x, y, metrics.cellSize, metrics.cellSize);
