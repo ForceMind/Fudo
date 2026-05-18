@@ -725,7 +725,7 @@ function App() {
     view === 'game' && roomCode ? `房间 ${roomCode}` : view === 'lobby' ? '房间大厅' : view === 'admin' ? '后台管理' : '生产版';
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell view-${view}`}>
       <header className="app-header">
         <div>
           <p className="eyebrow">2D Ludo Battle / 多人同步 / Canvas 棋盘</p>
@@ -739,15 +739,15 @@ function App() {
             onChange={(event) => setNicknameDraft(event.target.value)}
             placeholder="昵称"
           />
-          <button className="secondary-button header-button" type="button" onClick={() => void saveNickname()}>
+          <button className="secondary-button header-button save-nickname-button" type="button" onClick={() => void saveNickname()}>
             保存昵称
           </button>
           {view === 'game' && (
             <>
-              <button className="secondary-button header-button" type="button" onClick={exitGame}>
+              <button className="secondary-button header-button exit-game-button" type="button" onClick={exitGame}>
                 退出游戏
               </button>
-              <button className="secondary-button header-button" type="button" onClick={openRules}>
+              <button className="secondary-button header-button rules-button" type="button" onClick={openRules}>
                 规则
               </button>
             </>
